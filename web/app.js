@@ -1,6 +1,7 @@
 'use strict';
-// Health: one metric at a time (Recovery, Sleep or Activity) for the selected day in one plain sentence, over a
-// GitHub-style contribution graph of every day, read from the box's health-data connectors.
+// Health: Recovery, Sleep and Activity for the selected day, each in one plain sentence over its own GitHub-style
+// contribution graph of every day (all three side by side in a wide window, one at a time in a narrow one), read
+// from the box's health-data connectors.
 // Reads only this app's documented relative API; never talks to a provider and never takes keys.
 const el = id => document.getElementById(id);
 const SVG = 'http://www.w3.org/2000/svg';
@@ -146,10 +147,26 @@ function focusOf(metric, d, past) {
 }
 
 // ---------- the screen ----------
+// Three panels, one per metric, each with its question, focus card and graph. A wide window shows all three side by side
+// (container width, never the device); a narrow one shows the picked metric and puts the picker in a bottom bar.
+const METRICS = ['recovery', 'sleep', 'activity'];
+const WIDE = 680;                                    // keep in step with the @container rules in styles.css
+const app = document.querySelector('.wz-app');
+const wide = () => app.clientWidth >= WIDE;
+const P = {};                                        // metric -> { root, q(cls) }
+for (const root of document.querySelectorAll('.hl-panel')) {
+  root.append(el('panel-tpl').content.cloneNode(true));
+  const m = root.dataset.m, refs = {}, q = c => refs[c] || (refs[c] = root.querySelector('.' + c));
+  P[m] = { m, root, q, cells: q('hl-cells'), months: q('hl-months'), sc: q('hl-gscroll'), gin: q('hl-gin'), graph: q('hl-graph'), tip: q('hl-tip'), G: {} };
+}
+// Panels the window shows right now (hidden ones have no width to size a graph by).
+const visible = () => wide() ? METRICS.map(m => P[m]) : [P[METRIC]];
+
 function renderAll() {
   const data = hasData();
   el('empty').hidden = data;
   el('screen').hidden = !data;
+  el('dock').hidden = !data;
   if (!data) { renderEmpty(); return; }
   const p = primary(), ok = p && fresh(p);
   const dot = el('srcdot');
@@ -171,67 +188,85 @@ function setChip(c, F) {
 }
 function renderFocus() {
   const iso = shown(); if (!iso) return;
-  const F = focusOf(METRIC, rec4(iso) || {}, !!sel);
   el('date').textContent = dayName(iso);
   el('today').hidden = !sel;
-  el('fnum').textContent = F.value;
-  el('fof').textContent = F.of || '';
-  setChip(el('fchip'), F);
-  const bar = el('fbar');
+  for (const m of METRICS) focusPanel(P[m], iso);
+  for (const b of el('metric').children) b.setAttribute('aria-checked', String(b.dataset.m === METRIC));
+  for (const m of METRICS) P[m].root.classList.toggle('is-on', m === METRIC);
+}
+function focusPanel(X, iso) {
+  const q = X.q, m = X.m;
+  const F = focusOf(m, rec4(iso) || {}, !!sel);
+  q('fday').textContent = dayName(iso);
+  q('ftoday').hidden = !sel;
+  q('fnum').textContent = F.value;
+  q('fof').textContent = F.of || '';
+  setChip(q('fchip'), F);
+  const bar = q('fbar');
   bar.hidden = F.bar == null;
-  if (F.bar != null) { bar.className = 'hl-bar ' + (F.chipCls || ''); bar.firstChild.style.width = (F.bar * 100).toFixed(1) + '%'; }
-  el('fscale').textContent = F.scale || '';
-  el('fscale').hidden = !F.scale;
-  el('fsay').textContent = F.say;
-  el('falso').textContent = F.also || '';
-  el('falso').hidden = !F.also;
-  const A = ask(METRIC, !!sel);
-  el('ask1').textContent = A.q;
-  el('ask2').textContent = A.sub;
-  el('ask2').hidden = !A.sub;
-  const more = el('fmore');
+  if (F.bar != null) { bar.className = 'hl-bar fbar ' + (F.chipCls || ''); bar.firstChild.style.width = (F.bar * 100).toFixed(1) + '%'; }
+  q('fscale').textContent = F.scale || '';
+  q('fscale').hidden = !F.scale;
+  q('fsay').textContent = F.say;
+  q('falso').textContent = F.also || '';
+  q('falso').hidden = !F.also;
+  const A = ask(m, !!sel);
+  q('ask1').textContent = A.q;
+  q('ask2').textContent = A.sub;
+  q('ask2').hidden = !A.sub;
+  const more = q('fmore');
   more.textContent = F.more;
-  more.setAttribute('aria-label', (F.more === 'Why?' ? 'Why? ' : 'More about ') + SCALE[METRIC].name.toLowerCase());
-  el('focus').dataset.m = METRIC;
-  el('focus').setAttribute('aria-label', `${SCALE[METRIC].name}, ${dayName(iso)}: ${F.value}${F.of ? ' ' + F.of : ''}${F.chip ? ', ' + F.chip : ''}. ${F.say}${F.also ? ' ' + F.also : ''}`);
+  more.setAttribute('aria-label', (F.more === 'Why?' ? 'Why? ' : 'More about ') + SCALE[m].name.toLowerCase());
+  q('hl-focus').setAttribute('aria-label', `${SCALE[m].name}, ${dayName(iso)}: ${F.value}${F.of ? ' ' + F.of : ''}${F.chip ? ', ' + F.chip : ''}. ${F.say}${F.also ? ' ' + F.also : ''}`);
 }
 
-// ---------- the graph ----------
+// ---------- the graphs ----------
+// One week span for all three graphs, so the same day sits in the same square in each.
 let G = { start: null, weeks: 0, end: null };
-function renderGraph() {
-  const last = newest(); if (!last) return;
+function span() {
+  const last = newest(); if (!last) return null;
   const today = localIso(new Date());
   const endDay = last > today ? last : today;
   const end = addDays(endDay, 6 - dow(endDay));                  // the Saturday closing the newest week
   const dates = DAYS.map(d => d.date).sort();
   const first = dates[0] && dates[0] < last ? dates[0] : last;
-  // Only the weeks that hold data plus the current week (no grey lead-in); a history wider than the window scrolls
-  // sideways (a phone), opening on today.
+  // Only the weeks that hold data plus the current week (no grey lead-in); a history wider than the column scrolls
+  // sideways, opening on today.
   const weeks = Math.max(1, Math.round((Date.parse(end) - Date.parse(addDays(first, -dow(first)))) / DAY + 1) / 7);
-  const start = addDays(end, -(weeks * 7 - 1));                  // the Sunday opening the oldest week
-  const rebuilt = G.start !== start || G.weeks !== weeks;
-  G = { start, weeks, end, endDay };
-  const cells = el('cells'), months = el('months');
-  if (rebuilt) {
-    cells.replaceChildren(); months.replaceChildren();
-    let lastMonthCol = -9;
-    for (let i = 0; i < weeks * 7; i++) {
-      const iso = addDays(start, i);
-      if (iso > endDay) { cells.append(h('i', 'hl-cell hl-future')); continue; }
-      const b = h('button', 'hl-cell'); b.type = 'button'; b.dataset.d = iso;
-      cells.append(b);
-      // Month names sit over the first week that starts in that month, as on GitHub.
-      if (i % 7 === 0) {
-        const col = i / 7, wkMonth = iso.slice(0, 7), prev = col ? addDays(iso, -7).slice(0, 7) : null;
-        if ((col === 0 && iso.slice(8) <= '24') || (col > 0 && wkMonth !== prev)) {
-          if (col - lastMonthCol >= 2) { const m = h('span', '', noon(iso).toLocaleDateString('en-US', { month: 'short' })); m.style.setProperty('--col', col); months.append(m); lastMonthCol = col; }
-        }
+  return { start: addDays(end, -(weeks * 7 - 1)), weeks, end, endDay };
+}
+function renderGraph() {
+  const g = span(); if (!g) return;
+  const changed = G.start !== g.start || G.weeks !== g.weeks;
+  G = g;
+  for (const X of visible()) graphPanel(X, changed);
+}
+function buildCells(X) {
+  const { cells, months } = X;
+  quiet(150);
+  cells.replaceChildren(); months.replaceChildren();
+  let lastMonthCol = -9;
+  for (let i = 0; i < G.weeks * 7; i++) {
+    const iso = addDays(G.start, i);
+    if (iso > G.endDay) { cells.append(h('i', 'hl-cell hl-future')); continue; }
+    const b = h('button', 'hl-cell'); b.type = 'button'; b.dataset.d = iso;
+    cells.append(b);
+    // Month names sit over the first week that starts in that month, as on GitHub.
+    if (i % 7 === 0) {
+      const col = i / 7, wkMonth = iso.slice(0, 7), prev = col ? addDays(iso, -7).slice(0, 7) : null;
+      if ((col === 0 && iso.slice(8) <= '24') || (col > 0 && wkMonth !== prev)) {
+        if (col - lastMonthCol >= 2) { const mo = h('span', '', noon(iso).toLocaleDateString('en-US', { month: 'short' })); mo.style.setProperty('--col', col); months.append(mo); lastMonthCol = col; }
       }
     }
   }
-  const S = SCALE[METRIC], on = shown();
+  X.built = G.start + '/' + G.weeks;
+}
+function graphPanel(X, changed) {
+  const rebuilt = X.built !== G.start + '/' + G.weeks;
+  if (rebuilt) buildCells(X);
+  const S = SCALE[X.m], on = shown();
   let tracked = 0;
-  for (const b of cells.children) {
+  for (const b of X.cells.children) {
     const iso = b.dataset.d; if (!iso) continue;
     const d = rec4(iso), tip = d && S.tip(d);
     if (d) tracked++;
@@ -239,84 +274,94 @@ function renderGraph() {
     b.setAttribute('aria-label', short(iso) + ': ' + (tip || 'no data'));
     b.setAttribute('aria-pressed', String(iso === on));
   }
-  renderLegend();
-  for (const b of el('metric').children) b.setAttribute('aria-checked', String(b.dataset.m === METRIC));
-  const scrolls = sizeGraph();
+  renderLegend(X);
+  const scrolls = sizeGraph(X);
   const cap = S.cap(darkScheme());
-  el('cap').textContent = cap;
-  el('graph').setAttribute('aria-label', `${cap} ${tracked} ${tracked === 1 ? 'day' : 'days'} tracked${scrolls ? ', older weeks to the left' : ''}.`);
-  if (rebuilt) scrollToDay(on, true);
-  fitMonths();
-  showTip();
+  X.q('hl-cap').textContent = cap;
+  X.graph.setAttribute('aria-label', `${S.name}. ${cap} ${tracked} ${tracked === 1 ? 'day' : 'days'} tracked${scrolls ? ', older weeks to the left' : ''}.`);
+  if (rebuilt || changed || X.cell !== X.lastCell) scrollToDay(X, on, true);
+  X.lastCell = X.cell;
+  fitMonths(X);
+  showTip(X);
 }
-function renderLegend() {
-  const S = SCALE[METRIC], box = el('legend');
+function renderLegend(X) {
+  const S = SCALE[X.m], box = X.q('hl-legend');
   box.replaceChildren(h('span', '', S.ends[0]));
   for (const [cls, title] of S.keys) { const i = h('i', 'hl-cell ' + cls); i.title = title; box.append(i); }
   box.append(h('span', '', S.ends[1]));
   box.setAttribute('aria-label', S.name + ': ' + S.keys.map(k => k[1]).join(', '));
 }
-// Square size from the window's width (the scroller is as wide as its card, never as wide as its content):
-// every week fits when it can, in squares as big as fit; otherwise whole weeks of thumb-sized squares (22 px or more
-// on a narrow window) fill the view and older weeks scroll sideways.
 // Light skins draw a fuller day darker, dark skins brighter: the caption follows the scheme the shared client sets.
 function darkScheme() {
   const c = document.documentElement.dataset.colorScheme;
   return c ? c === 'dark' : !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
 }
-new MutationObserver(() => { if (hasData() && newest()) el('cap').textContent = SCALE[METRIC].cap(darkScheme()); })
+new MutationObserver(() => { if (hasData() && newest()) for (const m of METRICS) P[m].q('hl-cap').textContent = SCALE[m].cap(darkScheme()); })
   .observe(document.documentElement, { attributes: true, attributeFilter: ['data-color-scheme'] });
+// Square size from the panel's width (the scroller is as wide as its card, never as wide as its content):
+// every week fits when it can, in squares as big as fit; otherwise whole weeks of thumb-sized squares (22 px or more
+// in a narrow window) fill the view and older weeks scroll sideways.
 const GAP = 3;
-const narrowWin = () => el('main').clientWidth < 600;
-function sizeGraph() {
-  const sc = el('gscroll'), avail = sc.clientWidth - 4;           // .hl-gin's side padding
+function sizeGraph(X) {
+  const sc = X.sc, avail = sc.clientWidth - 4;                   // .hl-gin's side padding
   if (avail <= 0 || !G.weeks) return false;
-  const narrow = narrowWin(), min = narrow ? 22 : 15, max = narrow ? 36 : 40;
+  const narrow = !wide(), min = narrow ? 22 : 15, max = narrow ? 36 : 34;
   let cell = Math.floor((avail + GAP) / G.weeks) - GAP, vis = G.weeks;
   if (cell < min) { vis = Math.max(1, Math.floor((avail + GAP) / (min + GAP))); cell = Math.floor((avail + GAP) / vis) - GAP; }
   cell = Math.max(10, Math.min(cell, max));
   const scrolls = G.weeks > vis;
-  G.vis = vis; G.step = cell + GAP;
-  const g = el('graph');
-  g.style.setProperty('--cell', cell + 'px');
-  g.style.setProperty('--gap', GAP + 'px');
+  X.vis = vis; X.step = cell + GAP; X.cell = cell;
+  X.graph.style.setProperty('--cell', cell + 'px');
+  X.graph.style.setProperty('--gap', GAP + 'px');
   // When scrolling, the rounding remainder pads the right end so whole weeks line up with both edges (no sliver).
-  el('gin').style.paddingRight = scrolls ? Math.max(2, avail - (vis * G.step - GAP) + 2) + 'px' : '';
-  g.classList.toggle('hl-scrolls', scrolls);
+  X.gin.style.paddingRight = scrolls ? Math.max(2, avail - (vis * X.step - GAP) + 2) + 'px' : '';
+  X.graph.classList.toggle('hl-scrolls', scrolls);
   return scrolls;
 }
 // A month name cut by either edge of the visible squares, or crowding the next one, is hidden (no stray "un").
-function fitMonths() {
-  const sc = el('gscroll'), L = sc.scrollLeft, R = L + sc.clientWidth, W = el('cells').offsetWidth + 2;
+function fitMonths(X) {
+  const sc = X.sc, L = sc.scrollLeft, R = L + sc.clientWidth, W = X.cells.offsetWidth + 2;
   let next = Infinity;
-  for (const m of [...el('months').children].reverse()) {
-    const x = m.offsetLeft, w = m.offsetWidth;
+  for (const mo of [...X.months.children].reverse()) {
+    const x = mo.offsetLeft, w = mo.offsetWidth;
     const hide = x < L - 1 || x + w > Math.min(R, W + 2) + 1 || x + w + 6 > next;
-    m.style.visibility = hide ? 'hidden' : '';
+    mo.style.visibility = hide ? 'hidden' : '';
     if (!hide) next = x;
   }
 }
 // Bring a day's week into view, keeping whole weeks at both edges.
-function scrollToDay(iso, instant) {
-  const sc = el('gscroll'), b = iso && el('cells').querySelector(`[data-d="${iso}"]`);
-  if (!b || !G.step) return;
-  const col = Math.round((b.offsetLeft - 2) / G.step), first = Math.round(sc.scrollLeft / G.step), vis = G.vis || G.weeks;
+function scrollToDay(X, iso, instant) {
+  const sc = X.sc, b = iso && X.cells.querySelector(`[data-d="${iso}"]`);
+  if (!b || !X.step) return;
+  const col = Math.round((b.offsetLeft - 2) / X.step), first = Math.round(sc.scrollLeft / X.step), vis = X.vis || G.weeks;
   let left = null;
   if (col < first) left = col;
   else if (col > first + vis - 1) left = col - vis + 1;
   if (instant && col >= G.weeks - 1) left = Math.max(0, G.weeks - vis);   // opening on today: the newest weeks, flush
-  if (left != null) sc.scrollTo({ left: Math.max(0, left * G.step), behavior: instant ? 'instant' : 'smooth' });
+  if (left != null) { quiet(instant ? 150 : 700); sc.scrollTo({ left: Math.max(0, left * X.step), behavior: instant ? 'instant' : 'smooth' }); }
 }
-// GitHub-style tooltip over the square under the mouse (taps show the day in the focus card instead).
-function showTip() {
-  const tip = el('tip');
-  const iso = hoverIso;
-  const b = iso && el('cells').querySelector(`[data-d="${iso}"]`);
+const scrollAll = (iso, instant) => { for (const X of visible()) scrollToDay(X, iso, instant); };
+// Side by side, the three graphs scroll together when the owner scrolls one, so a week sits under the same week in every
+// column. The app's own scrolls (opening on today, picking a day) move all three alike and are not echoed.
+let quietUntil = 0, following = false;
+const quiet = ms => { quietUntil = Math.max(quietUntil, performance.now() + ms); };
+function syncScroll(src) {
+  if (following || !wide() || performance.now() < quietUntil) return;
+  following = true;
+  for (const m of METRICS) { const X = P[m]; if (X !== src && Math.abs(X.sc.scrollLeft - src.sc.scrollLeft) > 1) X.sc.scrollLeft = src.sc.scrollLeft; }
+  requestAnimationFrame(() => requestAnimationFrame(() => { following = false; }));
+}
+// GitHub-style tooltip over the square under the mouse (taps show the day in the focus cards instead).
+let hoverM = null;
+function showTip(X) {
+  const tip = X.tip;
+  const iso = hoverM === X.m ? hoverIso : null;
+  const b = iso && X.cells.querySelector(`[data-d="${iso}"]`);
   if (!b) { tip.hidden = true; return; }
-  const d = rec4(iso), t = d && SCALE[METRIC].tip(d);
+  const d = rec4(iso), t = d && SCALE[X.m].tip(d);
   tip.textContent = short(iso) + ' \u00b7 ' + (t || 'No data');
   tip.hidden = false;
-  const g = el('graph').getBoundingClientRect(), r = b.getBoundingClientRect(), sc = el('gscroll').getBoundingClientRect();
+  const g = X.graph.getBoundingClientRect(), r = b.getBoundingClientRect(), sc = X.sc.getBoundingClientRect();
   if (r.right < sc.left || r.left > sc.right) { tip.hidden = true; return; }
   const tw = tip.offsetWidth;
   let x = r.left + r.width / 2 - g.left - tw / 2;
@@ -325,18 +370,20 @@ function showTip() {
   tip.style.top = (r.top - g.top - tip.offsetHeight - 6) + 'px';
   tip.style.setProperty('--ax', (r.left + r.width / 2 - g.left - x) + 'px');
 }
+// A day picked in any graph is the day every card and graph shows.
 function pick(iso) {
   const n = newest();
   if (!iso || !n || iso > n) return;
   sel = iso === n ? null : iso;
   renderFocus(); renderGraph();
 }
-// Switching metric keeps the selected day.
+// Switching metric (narrow windows) keeps the selected day.
 function setMetric(m) {
   if (!SCALE[m] || m === METRIC) return;
   METRIC = m;
   try { localStorage.setItem(PREF, m); } catch (e) {}
   renderFocus(); renderGraph();
+  if (!wide()) el('main').scrollTop = 0;
 }
 
 // ---------- the detail sheet (one dialog, WzSheet closes it five ways) ----------
@@ -521,25 +568,39 @@ async function forget(id) {
 
 // ---------- interaction: taps only ----------
 for (const b of el('metric').children) b.onclick = () => setMetric(b.dataset.m);
-el('fmore').onclick = () => openAbout(METRIC);
 el('srcdot').onclick = openSources;
-el('today').onclick = () => { pick(newest()); scrollToDay(newest()); };
-el('cells').addEventListener('click', e => { const b = e.target.closest('button[data-d]'); if (b) { hoverIso = null; pick(b.dataset.d); } });
-el('cells').addEventListener('pointerover', e => {
-  if (e.pointerType !== 'mouse') return;
-  const b = e.target.closest('button[data-d]'); hoverIso = b ? b.dataset.d : null; showTip();
-});
-el('cells').addEventListener('pointerleave', () => { if (hoverIso) { hoverIso = null; showTip(); } });
-el('gscroll').addEventListener('scroll', () => { fitMonths(); showTip(); }, { passive: true });
+const toToday = () => { hoverIso = null; pick(newest()); scrollAll(newest()); };
+el('today').onclick = toToday;
+for (const m of METRICS) {
+  const X = P[m];
+  X.q('fmore').onclick = () => openAbout(m);
+  X.q('ftoday').onclick = toToday;
+  X.cells.addEventListener('click', e => { const b = e.target.closest('button[data-d]'); if (b) { hoverIso = null; pick(b.dataset.d); } });
+  X.cells.addEventListener('pointerover', e => {
+    if (e.pointerType !== 'mouse') return;
+    const b = e.target.closest('button[data-d]'); hoverIso = b ? b.dataset.d : null; hoverM = m; showTip(X);
+  });
+  X.cells.addEventListener('pointerleave', () => { if (hoverIso) { hoverIso = null; showTip(X); } });
+  X.sc.addEventListener('scroll', () => { fitMonths(X); showTip(X); syncScroll(X); }, { passive: true });
+}
 document.addEventListener('keydown', e => {
   if (el('sheet').open || !hasData() || e.target.closest('input, textarea')) return;
   const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -1, ArrowDown: 1 }[e.key];
   if (!step || e.target.closest('#metric')) return;
   const span = e.key === 'ArrowLeft' || e.key === 'ArrowRight' ? 7 : 1;
   const iso = addDays(shown(), step * span);
-  if (iso <= newest() && iso >= G.start) { e.preventDefault(); pick(iso); scrollToDay(iso); const b = el('cells').querySelector(`[data-d="${iso}"]`); if (b) b.focus({ preventScroll: true }); }
+  if (iso <= newest() && iso >= G.start) {
+    e.preventDefault(); pick(iso); scrollAll(iso);
+    const host = e.target.closest('.hl-panel') || P[METRIC].root, b = host.querySelector(`.hl-cells [data-d="${iso}"]`);
+    if (b) b.focus({ preventScroll: true });
+  }
 });
-new ResizeObserver(() => { if (hasData() && newest()) renderGraph(); }).observe(el('main'));
+let wasWide = null;
+new ResizeObserver(() => {
+  const w = wide();
+  if (w !== wasWide) { wasWide = w; for (const m of METRICS) P[m].built = null; }
+  if (hasData() && newest()) renderGraph();
+}).observe(app);
 
 // ---------- loading (cached copy first, then fresh) ----------
 const CACHE = 'wizard-health.screen.v5', PREF = 'wizard-health.metric';
@@ -573,13 +634,13 @@ function poll() { clearTimeout(pollTimer); pollTimer = setTimeout(async () => { 
 function canBack() { return hasData() && !!sel; }
 function goBack() {
   if (!canBack()) return false;
-  hoverIso = null; pick(newest()); scrollToDay(newest()); return true;
+  toToday(); return true;
 }
 (function start() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.6.0' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.7.0' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();

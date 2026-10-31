@@ -52,25 +52,31 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-wait { width: 8px; height: 8px; border-radius: 50%; background: var(--hi); animation: hl-pulse 1.4s ease-in-out infinite; }
 @keyframes hl-pulse { 50% { opacity: .25; } }
 
-/* ---------- one screen: the metric picker, one focus card, then every day as squares ---------- */
-.hl-screen { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding-top: 6px; }
+/* ---------- one screen: Recovery, Sleep and Activity, each a question, a focus card and its graph ---------- */
+.hl-screen { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 4px; }
+.hl-panel { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; min-width: 0; }
 
-/* the picker: a plain segmented control in the top row, the sources dot beside it */
-.hl-top { display: flex; align-items: center; gap: 6px; }
-.hl-seg { flex: 1; display: flex; gap: 2px; padding: 3px; border-radius: var(--r-pill); background: var(--fill); border: 1px solid var(--line); }
-.hl-seg button { flex: 1; min-height: 42px; padding: 0 12px; border: 0; border-radius: var(--r-pill); background: none; color: var(--ink-2); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.hl-seg button[aria-checked="true"] { background: var(--ink); color: var(--canvas); }
-.hl-srcdot { flex: none; margin-right: -8px; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; }
+/* top: the sources dot in the corner; in a wide window also the shown day and Today, once for all three */
+.hl-top { display: contents; }
+.hl-when-row { display: none; }
+.hl-srcdot { position: absolute; z-index: 2; top: -6px; right: -12px; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; }
 .hl-srcdot i { width: 9px; height: 9px; border-radius: 50%; background: var(--hi); box-shadow: 0 0 0 4px color-mix(in srgb, var(--hi) 18%, transparent); }
 .hl-srcdot.stale i { background: var(--md); box-shadow: 0 0 0 4px color-mix(in srgb, var(--md) 20%, transparent); }
 
-/* the plain question under the picker: muted, one short line (Recovery adds a second, smaller one) */
-.hl-ask { display: grid; justify-items: center; gap: 2px; margin: -4px 0 -2px; text-align: center; font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--ink-2); text-wrap: balance; }
-.hl-ask small { font-size: 13px; font-weight: 500; color: var(--ink-3); text-wrap: pretty; }
+/* the picker: a plain segmented control in a thumb bar at the bottom of the window. It is the window's last row, below
+ * the scrolling content (never over it), and it clears the safe area and, in full screen, the shell's orb and strip. */
+.hl-dock { flex: none; padding: 8px var(--wz-gutter, 12px) calc(8px + var(--hl-below)); border-top: 1px solid var(--line); }
+.hl-seg { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-pill); background: var(--fill); border: 1px solid var(--line); }
+.hl-seg button { flex: 1; min-height: 44px; padding: 0 12px; border: 0; border-radius: var(--r-pill); background: none; color: var(--ink-2); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.hl-seg button[aria-checked="true"] { background: var(--ink); color: var(--canvas); }
+
+/* the plain question: muted, one short line (Recovery adds a second, smaller one); clear of the corner dot */
+.hl-ask { display: grid; justify-items: center; gap: 2px; margin: 0; padding: 4px 34px 0; text-align: center; font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--ink-2); text-wrap: balance; }
+.hl-ask small { font-size: 12.5px; font-weight: 500; color: var(--ink-3); text-wrap: pretty; }
 
 /* the focus card: day, a big number with its chip, one sentence, a quiet Why?/More */
-.hl-focus { display: grid; gap: 10px; padding: 18px 18px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--fill); }
-.hl-fhead { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.hl-focus { display: grid; align-content: start; gap: 8px; padding: 14px 18px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--fill); }
+.hl-fhead { display: flex; align-items: center; gap: 10px; min-height: 26px; }
 .hl-day { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0; color: var(--ink-2); }
 .hl-today { margin-left: auto; min-height: 32px; padding: 0 14px; border: 1px solid var(--line-2, var(--line)); border-radius: var(--r-pill); background: var(--fill-2, var(--fill)); color: var(--ink); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
 .hl-fmain { display: grid; gap: 12px; }
@@ -80,9 +86,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-fval .hl-chip { height: 30px; font-size: 14px; }
 .hl-bar { height: 6px; border-radius: 3px; background: var(--cell0); overflow: hidden; }
 .hl-bar > i { display: block; height: 100%; border-radius: 3px; background: var(--c, var(--ink-3)); }
-.hl-fside { display: grid; justify-items: start; gap: 0; }
-.hl-say { margin: 2px 0 0; font-size: 17px; line-height: 1.4; color: var(--ink); text-wrap: pretty; }
-.hl-also { margin: 6px 0 0; font-size: 15px; line-height: 1.4; color: var(--ink-2); text-wrap: pretty; }
+.hl-fside { display: grid; justify-items: start; align-content: start; gap: 0; }
+.hl-say { margin: 2px 0 0; font-size: 16px; line-height: 1.38; color: var(--ink); text-wrap: pretty; }
+.hl-also { margin: 4px 0 0; font-size: 15px; line-height: 1.4; color: var(--ink-2); text-wrap: pretty; }
 .hl-scale { margin: -6px 0 0; font-size: 13px; color: var(--ink-3); }
 .hl-more { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-left: -2px; padding: 0 2px; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .hl-more::after { content: ""; width: 6px; height: 6px; border-top: 1.6px solid currentColor; border-right: 1.6px solid currentColor; transform: rotate(45deg); opacity: .8; }
@@ -115,34 +121,63 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-tip { position: absolute; z-index: 5; padding: 5px 9px; border-radius: 6px; background: var(--ink); color: var(--canvas); font-size: 12px; font-weight: 600; white-space: nowrap; pointer-events: none; }
 .hl-tip::after { content: ""; position: absolute; top: 100%; left: calc(var(--ax, 50%) - 5px); border: 5px solid transparent; border-top-color: var(--ink); }
 
-/* phones: generous spacing, the screen grows with its content */
-@container wz-app (max-width: 599px) {
-  .hl-screen { gap: 12px; padding-top: 4px; }
-  .hl-ask small { font-size: 12.5px; }
-  .hl-say { font-size: 16px; line-height: 1.38; }
-  .hl-seg button { min-height: 44px; }
-  .hl-ask { margin: -2px 0 0; }
-  .hl-focus { gap: 8px; padding-top: 14px; }
-  .hl-fhead { min-height: 26px; }
-  .hl-also { margin-top: 4px; }
+/* narrow windows (phones, thin desktop windows): the picked metric only; the picker is the bottom bar */
+@container wz-app (max-width: 679.98px) {
+  .hl-panel:not(.is-on) { display: none; }
+  .hl-scroll { padding-bottom: var(--wz-space-4, 16px); }   /* the bottom bar carries the safe-area clearance */
 }
-/* wide windows (and short-wide tiled ones): the picker centred, the card's sentence beside its number */
-@container wz-app (min-width: 700px) {
-  .hl-screen { gap: 18px; padding-top: 14px; }
-  .hl-top { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; }
-  .hl-seg { grid-column: 2; justify-self: center; flex: none; }
-  .hl-seg button { flex: none; min-width: 120px; }
-  .hl-srcdot { grid-column: 3; justify-self: end; }
-  .hl-focus { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "head head" "main side"; align-items: center; gap: 8px 32px; padding: 20px 24px 12px; }
-  .hl-fhead { grid-area: head; }
-  .hl-fmain { grid-area: main; align-self: start; }
-  .hl-fside { grid-area: side; }
-  .hl-fval b { font-size: 60px; }
-  .hl-say { font-size: 18px; }
-  .hl-graph { padding: 16px 18px 14px 12px; }
+/* wide windows: all three side by side, no picker. Columns (not stacked rows) so all three fit above the fold even in a
+ * tiled desktop window; subgrid lines the questions, cards and graphs up across the columns, and the three graphs share
+ * one week span and scroll together. Keep 680 in step with WIDE in app.js. */
+@container wz-app (min-width: 680px) {
+  .hl-dock { display: none; }
+  .hl-screen { gap: 10px; padding-top: 6px; }
+  .hl-top { display: flex; align-items: center; gap: 10px; min-height: 40px; }
+  .hl-when-row { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; padding-left: 2px; }
+  .hl-when-row .hl-day { font-size: 17px; font-weight: 650; color: var(--ink); }
+  .hl-when-row .hl-today { margin-left: 0; }
+  .hl-when-row { flex: none; }
+  .hl-srcdot { position: static; margin-left: -6px; }   /* beside the day, clear of the shell's full-screen corner controls */
+  .hl-panels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(5, auto); column-gap: 12px; row-gap: 10px; }
+  /* rows: question, card, then the graph box's caption, squares and legend, each lined up across the three columns */
+  .hl-panel { grid-row: span 5; grid-template-rows: subgrid; gap: 10px; }
+  .hl-graph { grid-row: span 3; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: subgrid; row-gap: 0; align-content: start; }
+  .hl-graph .hl-gwrap { align-self: end; }
+  .hl-fhead { display: none; }
+  .hl-ask { align-self: end; justify-items: start; padding: 0 4px; text-align: left; font-size: 14px; }
+  .hl-ask small { font-size: 12px; }
+  .hl-focus { padding: 14px 14px 6px; }
+  .hl-fval b { font-size: 40px; }
+  .hl-fval small { font-size: 13.5px; margin-bottom: 3px; }
+  .hl-fval .hl-chip { height: 28px; font-size: 13px; }
+  .hl-say { font-size: 15px; line-height: 1.38; }
+  .hl-also { font-size: 13.5px; }
+  .hl-scale { font-size: 12.5px; }
+  .hl-more { min-height: 40px; font-size: 14px; }
+  .hl-graph { padding: 12px 8px 10px 4px; }
+  .hl-cap { margin: 0 0 8px 6px; font-size: 12.5px; }
+  .hl-wd { width: 28px; font-size: 11px; }
+  .hl-foot { gap: 6px 10px; margin-top: 10px; font-size: 12px; justify-content: flex-start; }
+  .hl-foot > span { white-space: nowrap; }
+  .hl-foot .hl-legend { margin-left: auto; }
+  .hl-foot .hl-cell { width: 11px; height: 11px; }
+  .hl-legend span { margin: 0 2px; }
 }
-@container wz-app (min-width: 1000px) {
-  .hl-focus { grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 8px 48px; }
+/* tiled desktop windows: three slim columns; the legend gets its own line */
+@container wz-app (min-width: 680px) and (max-width: 959.98px) {
+  .hl-foot { font-size: 11.5px; }
+  .hl-foot .hl-legend { margin-left: 0; }
+  .hl-foot .hl-cell { width: 10px; height: 10px; }
+  .hl-legend span { margin: 0 1px; }
+  .hl-fval b { font-size: 36px; }
+}
+@container wz-app (min-width: 1100px) {
+  .hl-panels { column-gap: 18px; }
+  .hl-ask { font-size: 15px; }
+  .hl-focus { padding: 16px 18px 8px; }
+  .hl-fval b { font-size: 48px; }
+  .hl-say { font-size: 16px; }
+  .hl-graph { padding: 14px 12px 12px 8px; }
 }
 
 /* ---------- sheets ---------- */

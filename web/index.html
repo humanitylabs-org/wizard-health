@@ -30,59 +30,69 @@
       </section>
 
       <section id="screen" class="hl-screen" hidden>
-        <!-- One metric at a time: it fills the focus card and colours the squares -->
+        <!-- Wide windows: the shown day (and Today) once for all three; narrow windows show it in the card.
+             The sources dot sits in the top corner either way; its sheet lists the sources. -->
         <header class="hl-top">
-          <div class="hl-seg" id="metric" role="radiogroup" aria-label="Show">
-            <button type="button" role="radio" data-m="recovery" aria-checked="true">Recovery</button>
-            <button type="button" role="radio" data-m="sleep" aria-checked="false">Sleep</button>
-            <button type="button" role="radio" data-m="activity" aria-checked="false">Activity</button>
-          </div>
-          <!-- Source freshness: one dot; its sheet lists the sources -->
+          <div class="hl-when-row"><h1 class="hl-day" id="date"></h1><button type="button" class="hl-today" id="today" aria-label="Back to today" hidden>Today</button></div>
           <button type="button" class="hl-srcdot" id="srcdot" aria-label="Sources"><i></i></button>
         </header>
-        <!-- The one plain question the chosen metric answers -->
-        <p class="hl-ask" id="ask"><span id="ask1"></span><small id="ask2" hidden></small></p>
-
-        <!-- The selected metric on the selected day (today unless a square below is tapped), in one plain sentence -->
-        <section class="hl-focus" id="focus" aria-live="polite">
-          <div class="hl-fhead">
-            <h1 class="hl-day" id="date"></h1>
-            <button type="button" class="hl-today" id="today" aria-label="Back to today" hidden>Today</button>
-          </div>
-          <div class="hl-fmain">
-            <div class="hl-fval"><b id="fnum"></b><small id="fof"></small><span class="hl-chip" id="fchip" hidden></span></div>
-            <div class="hl-bar" id="fbar" hidden><i></i></div>
-            <p class="hl-scale" id="fscale" hidden></p>
-          </div>
-          <div class="hl-fside">
-            <p class="hl-say" id="fsay"></p>
-            <p class="hl-also" id="falso" hidden></p>
-            <button type="button" class="hl-more" id="fmore">Why?</button>
-          </div>
-        </section>
-
-        <!-- Every day as a square, like a GitHub contribution graph: weeks are columns, Sunday to Saturday rows -->
-        <section class="hl-graph" id="graph" aria-label="Every day">
-          <p class="hl-cap" id="cap"></p>
-          <div class="hl-gwrap">
-            <div class="hl-wd" aria-hidden="true"><span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span></div>
-            <div class="hl-gscroll" id="gscroll">
-              <div class="hl-gin" id="gin">
-                <div class="hl-months" id="months" aria-hidden="true"></div>
-                <div class="hl-cells" id="cells"></div>
-              </div>
-            </div>
-          </div>
-          <div class="hl-foot">
-            <span class="hl-nodata"><i class="hl-cell"></i>No data</span>
-            <span class="hl-legend" id="legend"></span>
-          </div>
-          <div class="hl-tip" id="tip" role="status" hidden></div>
-        </section>
+        <!-- Recovery, Sleep and Activity: all three side by side in a wide window, one at a time (picked in the bottom bar) in a
+             narrow one. Each is a plain question, one focus card for the shown day and its own GitHub-style graph. -->
+        <div class="hl-panels" id="panels">
+          <article class="hl-panel" data-m="recovery" aria-label="Recovery"></article>
+          <article class="hl-panel" data-m="sleep" aria-label="Sleep"></article>
+          <article class="hl-panel" data-m="activity" aria-label="Activity"></article>
+        </div>
       </section>
     </main>
+    <!-- Narrow windows: the picker is a thumb bar at the bottom of the window, below the content (never over it) -->
+    <nav class="hl-dock" id="dock" aria-label="Show" hidden>
+      <div class="hl-seg" id="metric" role="radiogroup" aria-label="Show">
+        <button type="button" role="radio" data-m="recovery" aria-checked="true">Recovery</button>
+        <button type="button" role="radio" data-m="sleep" aria-checked="false">Sleep</button>
+        <button type="button" role="radio" data-m="activity" aria-checked="false">Activity</button>
+      </div>
+    </nav>
     <p id="status" class="wz-status wz-sr" role="status" aria-live="polite"></p>
   </div>
+  <!-- One metric: the plain question, the focus card for the shown day, then every day as a square (weeks are columns,
+       Sunday to Saturday rows). Cloned into each panel above; ids are not used inside it. -->
+  <template id="panel-tpl">
+    <p class="hl-ask"><span class="ask1"></span><small class="ask2" hidden></small></p>
+    <section class="hl-focus" aria-live="polite">
+      <div class="hl-fhead">
+        <h2 class="hl-day fday"></h2>
+        <button type="button" class="hl-today ftoday" aria-label="Back to today" hidden>Today</button>
+      </div>
+      <div class="hl-fmain">
+        <div class="hl-fval"><b class="fnum"></b><small class="fof"></small><span class="hl-chip fchip" hidden></span></div>
+        <div class="hl-bar fbar" hidden><i></i></div>
+        <p class="hl-scale fscale" hidden></p>
+      </div>
+      <div class="hl-fside">
+        <p class="hl-say fsay"></p>
+        <p class="hl-also falso" hidden></p>
+        <button type="button" class="hl-more fmore">Why?</button>
+      </div>
+    </section>
+    <section class="hl-graph" aria-label="Every day">
+      <p class="hl-cap"></p>
+      <div class="hl-gwrap">
+        <div class="hl-wd" aria-hidden="true"><span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span></div>
+        <div class="hl-gscroll">
+          <div class="hl-gin">
+            <div class="hl-months" aria-hidden="true"></div>
+            <div class="hl-cells"></div>
+          </div>
+        </div>
+      </div>
+      <div class="hl-foot">
+        <span class="hl-nodata"><i class="hl-cell"></i>No data</span>
+        <span class="hl-legend"></span>
+      </div>
+      <div class="hl-tip" role="status" hidden></div>
+    </section>
+  </template>
   <dialog class="wz-sheet hl-sheet" id="sheet" aria-labelledby="sheet-h"><div id="sheet-body"></div></dialog>
 </body>
 </html>

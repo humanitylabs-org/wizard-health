@@ -3,15 +3,15 @@
   "id": "wizard-health",
   "wizard_type": "view",
   "available": true,
-  "short_desc": "View: your recovery, sleep or activity from connected wearables such as WHOOP, in one plain sentence, every day as a square like a GitHub graph.",
+  "short_desc": "View: your recovery, sleep and activity from connected wearables such as WHOOP, in plain sentences, every day as a square like a GitHub graph.",
   "author": "Humanity Labs",
   "port": 8826,
   "categories": [
     "media"
   ],
-  "description": "A health tracker over the wearables you connect (WHOOP today, more later). Pick Recovery, Sleep or Activity: one card shows the day as a big number, a coloured word and one plain sentence (Why? opens the last 30 days and the numbers behind it), above a GitHub-style graph of every day; tap a day to see it. Health reads connector apps through the health-data contract and never holds a wearable's keys. Your agent gets read-only tools for the same data.",
-  "tipi_version": 11,
-  "version": "0.6.0",
+  "description": "A health tracker over the wearables you connect (WHOOP today, more later). Recovery, Sleep and Activity each get a card with a big number, a coloured word and one plain sentence (Why? opens the last 30 days and the numbers behind it), above a GitHub-style graph of every day; tap a day to see it. Wide windows show all three side by side; on a phone a bottom bar picks one. Health reads connector apps through the health-data contract and never holds a wearable's keys. Your agent gets read-only tools for the same data.",
+  "tipi_version": 12,
+  "version": "0.7.0",
   "source": "https://github.com/oscarhenrycollins/wizard-health",
   "exposable": false,
   "supported_architectures": [
@@ -19,7 +19,7 @@
     "arm64"
   ],
   "created_at": 1793380828795,
-  "updated_at": 1793425166000,
+  "updated_at": 1793428731814,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,

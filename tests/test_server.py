@@ -305,18 +305,34 @@ class ViewTest(unittest.TestCase):
         html = (self.web / 'index.html').read_text()
         js = (self.web / 'app.js').read_text()
         css = (self.web / 'styles.css').read_text()
-        # one metric at a time: the picker on top, one focus card, then the GitHub-style graph; no four-row block
-        for need in ('id="screen"', 'id="cells"', 'id="months"', 'id="legend"', 'id="metric"', 'data-m="recovery"', 'data-m="sleep"', 'data-m="activity"',
-                     'id="focus"', 'id="fnum"', 'id="fchip"', 'id="fsay"', 'id="fmore"', 'id="fbar"', 'id="today"', 'id="srcdot"', 'id="connect"', 'id="tip"', '>Mon<', '>Wed<', '>Fri<'):
+        # three panels (Recovery, Sleep, Activity), each a question, a focus card and its own graph, cloned from one template
+        for need in ('id="screen"', 'id="panels"', 'id="panel-tpl"', 'class="hl-cells"', 'class="hl-months"', 'class="hl-legend"', 'class="hl-cap"',
+                     'id="metric"', 'id="dock"', 'data-m="recovery"', 'data-m="sleep"', 'data-m="activity"',
+                     'class="hl-focus"', 'class="fnum"', 'fchip', 'class="hl-say fsay"', 'fmore', 'fbar', 'id="today"', 'ftoday', 'id="srcdot"',
+                     'id="connect"', 'class="hl-tip"', '>Mon<', '>Wed<', '>Fri<'):
             self.assertIn(need, html)
-        self.assertLess(html.index('id="metric"'), html.index('id="focus"'))
-        self.assertLess(html.index('id="focus"'), html.index('id="graph"'))
-        self.assertLess(html.index('id="cells"'), html.index('id="legend"'))
-        for gone in ('lk-orb', 'lk-cards', 'lk-year', 'id="looks"', 'looks.js', 'motion.js', 'id="dash"', 'id="stats"', 's-hrv', 'hl-stat'):
-            self.assertNotIn(gone, html)
-        for gone in ('Push', 'Steady', "'Rest'", 'pointerdown', 'touchstart', 'swipe', 'api/look', 'Strain'):
-            self.assertNotIn(gone, js, gone)
-        self.assertFalse((self.web / 'looks.js').exists() or (self.web / 'motion.js').exists())
+        self.assertEqual(html.count('class="hl-panel"'), 3)
+        tpl = html[html.index('id="panel-tpl"'):]
+        self.assertLess(tpl.index('hl-ask'), tpl.index('hl-focus'))
+        self.assertLess(tpl.index('hl-focus'), tpl.index('hl-graph'))
+        self.assertLess(tpl.index('hl-cells'), tpl.index('hl-legend'))
+        self.assertNotRegex(tpl[:tpl.index('</template>')], r'\sid="')          # cloned three times: no ids inside
+        # narrow windows: the picker is a bottom bar after the scrolling content, never inside it
+        self.assertLess(html.index('</main>'), html.index('id="dock"'))
+        self.assertLess(html.index('id="panels"'), html.index('id="metric"'))
+        # wide = container width (never the device), the same breakpoint in CSS and JS, all three at once with no picker
+        self.assertIn('const WIDE = 680', js)
+        self.assertIn('@container wz-app (min-width: 680px)', css)
+        self.assertIn('@container wz-app (max-width: 679.98px)', css)
+        self.assertRegex(css, r'@container wz-app \(min-width: 680px\) \{\s*\.hl-dock \{ display: none; \}')
+        self.assertIn('grid-template-columns: repeat(3, minmax(0, 1fr))', css)
+        self.assertIn('grid-template-rows: subgrid', css)
+        self.assertNotIn('@media (min-width', css)
+        # one picked day for all three: pick() re-renders every panel; side-by-side graphs scroll together
+        self.assertIn('for (const m of METRICS) focusPanel(P[m], iso)', js)
+        self.assertIn('function syncScroll', js)
+        # the bottom bar carries the safe-area/full-screen clearance
+        self.assertRegex(css, r'\.hl-dock \{[^}]*var\(--hl-below\)')
         # plain words for the bands (WHOOP recovery 0-33/34-66/67-100; strain <10/10-14/14-18/18+; sleep vs need 85%/70%)
         words = (self.web / 'words.js').read_text()
         self.assertIn('src="words.js"', html)
@@ -326,7 +342,7 @@ class ViewTest(unittest.TestCase):
                      'Why?', "'More'", 'Back to today', 'usual', 'Resting heart rate', 'Blood oxygen', 'Skin temperature', 'Calories',
                      'Heart rate variability (HRV)', 'Higher usually means more recovered', 'Lower is usually better',
                      "'Less sleep', 'More sleep'", "'Easier', 'Harder'", "'Run down', 'Ready'", 'Green = ready, yellow = so-so, red = run down',
-                     "(dark ? 'Brighter' : 'Darker') + ' = more sleep.'", "(dark ? 'Brighter' : 'Darker') + ' = harder day.'", 'data-color-scheme', 'out of ', '0 = resting all day', 'id="ask1"', 'id="falso"', 'id="fscale"'):
+                     "(dark ? 'Brighter' : 'Darker') + ' = more sleep.'", "(dark ? 'Brighter' : 'Darker') + ' = harder day.'", 'data-color-scheme', 'out of ', '0 = resting all day', 'ask1', 'falso', 'fscale'):
             self.assertIn(word, js + html + words, word)
         self.assertIn('v >= 67', words); self.assertIn('v >= 34', words)
         self.assertIn('v >= 18', words); self.assertIn('v >= 14', words); self.assertIn('v >= 10', words)
@@ -356,6 +372,25 @@ class ViewTest(unittest.TestCase):
         self.assertGreaterEqual(len(bands), 5)
         for v in bands:
             self.assertNotIn('var(--danger)', v)
+
+
+class IconTest(unittest.TestCase):
+    """The app ships its own icon: a full-colour square for the store (icon.png from wizard.md) and a one-colour
+    silhouette at web/icon.svg (served at /wizard-health/icon.svg) that the shell tints like its own sigils."""
+    root = Path(__file__).resolve().parent.parent
+
+    def test_icons(self):
+        import re
+        w = (self.root / 'wizard.md').read_text()
+        self.assertIn('\nicon: icon.png\n', w)
+        png = (self.root / 'icon.png').read_bytes()
+        self.assertEqual(png[:8], b'\x89PNG\r\n\x1a\n')
+        self.assertEqual(int.from_bytes(png[16:20], 'big'), 1024)
+        self.assertEqual(int.from_bytes(png[20:24], 'big'), 1024)
+        mask = (self.root / 'web' / 'icon.svg').read_text()
+        self.assertIn('viewBox="0 0 512 512"', mask)
+        self.assertNotRegex(mask, r'fill="#|<text|<image|href=')          # a pure silhouette: the shell paints it
+        self.assertEqual(mask.count('<rect'), 3)                           # three days stepping up, like the graph
 
 
 class WordsTest(unittest.TestCase):
