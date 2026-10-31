@@ -6,7 +6,7 @@ type: view
 category: app
 version: 0.5.0
 summary: Your recovery, sleep or activity from a wearable like WHOOP, in one plain sentence, with every day as a square like a GitHub graph.
-tags: [health, fitness, sleep]
+tags: [data]
 license: GPL-3.0-only
 source: https://github.com/oscarhenrycollins/wizard-health
 runtime:
