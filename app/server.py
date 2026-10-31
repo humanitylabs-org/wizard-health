@@ -17,6 +17,11 @@ main source's record; a metric it lacks that day is filled from another source a
 Each source is pulled with its `changed_since` cursor (only days that changed). When a source's `dataset` id changes
 (Disconnect wiped it), Health drops that source's copy and reads it again.
 
+A source that reports not_configured/disconnected, or is no longer discovered (uninstalled), stops counting at once:
+its days are left out of every read. Its stored days are purged only after it has stayed that way for
+HEALTH_GONE_PURGE_HOURS (24 h), so a connector restart never wipes anything. When it comes back Health reads it again
+from the start.
+
 Stdlib only. DATA_DIR holds health.sqlite3 (0600, folder 0700).
 """
 import datetime as dt
@@ -36,7 +41,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent if '__file__' in globals() else Path(os.environ.get('APP_ROOT', '.')).resolve()
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'wizard-health'
-VERSION = '0.10.0'
+VERSION = '0.10.1'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8826')
 CONTRACT = 'wizard.health-data/1'
@@ -63,6 +68,10 @@ PROBE_TTL = float(os.environ.get('HEALTH_PROBE_TTL', '90'))
 PULL_MINUTES = float(os.environ.get('HEALTH_PULL_MINUTES', '10'))
 LOOP_SECONDS = float(os.environ.get('HEALTH_LOOP_SECONDS', '60'))
 LIVE = ('connected', 'syncing', 'rate_limited')
+# A source reporting one of these (or no longer discovered at all) is off: its days are not used, and after
+# GONE_PURGE_HOURS in a row they are deleted. needs_login and errors are not off: the data is still the owner's.
+GONE = ('not_configured', 'disconnected')
+GONE_PURGE_HOURS = float(os.environ.get('HEALTH_GONE_PURGE_HOURS', '24'))
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml'}
 DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 ID_RE = re.compile(r'^[a-z0-9][a-z0-9-]{1,40}$')
@@ -95,6 +104,12 @@ def db():
         PRIMARY KEY (source, date));
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
     ''')
+    if 'gone_since' not in {r[1] for r in c.execute('PRAGMA table_info(sources)')}:
+        try:
+            with c:
+                c.execute('ALTER TABLE sources ADD COLUMN gone_since TEXT')
+        except sqlite3.OperationalError:      # another thread added it first
+            pass
     return c
 
 
@@ -328,16 +343,71 @@ def pull(p):
     return n
 
 
+def is_gone(p):
+    """Whether a probed source (None = not discovered) is off: its days must not be shown."""
+    return not p or p.get('status') in GONE
+
+
+def hidden_sources(live=None):
+    """Ids whose days Health holds but must not use right now: off (not set up / disconnected) or no longer found."""
+    live = live if live is not None else {p['id']: p for p in probe_all()}
+    with LOCK:
+        c = db()
+        try:
+            held = {r['source'] for r in c.execute('SELECT DISTINCT source FROM days')}
+        finally:
+            c.close()
+    return {sid for sid in held if is_gone(live.get(sid))}
+
+
+def purge_source(sid, keep_row=True):
+    """Delete Health's copy of one source's days and reset its cursor, so a reconnect reads it from the start."""
+    _exec('DELETE FROM days WHERE source=?', (sid,))
+    if keep_row:
+        _exec('UPDATE sources SET cursor=NULL, dataset=NULL, last_pull=NULL WHERE id=?', (sid,))
+    else:
+        _exec('DELETE FROM sources WHERE id=?', (sid,))
+
+
+def track_presence(found, rows=None):
+    """After a fresh probe: stamp when each held source went off, clear the stamp when it is back (and make it read
+    again from the start), and purge sources that have stayed off for GONE_PURGE_HOURS. Returns the ids that came
+    back. Only ever touches sources that are off right now."""
+    live = {p['id']: p for p in found}
+    rows = rows if rows is not None else _source_rows()
+    back = set()
+    for sid, row in rows.items():
+        p = live.get(sid)
+        if not is_gone(p):
+            if row.get('gone_since'):
+                back.add(sid)
+                _exec('UPDATE sources SET gone_since=NULL, cursor=NULL, last_pull=NULL WHERE id=?', (sid,))
+            continue
+        if not row.get('gone_since'):
+            _exec('UPDATE sources SET gone_since=? WHERE id=?', (_iso(), sid))
+        elif _ago(row['gone_since']) >= GONE_PURGE_HOURS * 3600:
+            # installed but off: keep the row (it is still listed); uninstalled: forget it entirely
+            purge_source(sid, keep_row=bool(p))
+            if p:
+                _exec('UPDATE sources SET gone_since=NULL WHERE id=?', (sid,))
+            elif _setting('primary') == sid:
+                _setting('primary', clear=True)
+    return back
+
+
 def pull_all(fresh_probe=True, force=False):
     if not PULL_LOCK.acquire(blocking=force):
         return {'pulled': {}, 'note': 'Already refreshing.'}
     try:
         got = {}
+        found = probe_all(fresh=fresh_probe)
+        back = track_presence(found)
         rows = _source_rows()
-        for p in probe_all(fresh=fresh_probe):
+        for p in found:
             row = rows.get(p['id']) or {}
             prev = json.loads(row['status']) if row.get('status') else {}
-            due = p['status'] in LIVE and (force or not row.get('last_pull') or _ago(row.get('last_pull')) > PULL_MINUTES * 60
+            due = p['status'] in LIVE and (force or p['id'] in back or not row.get('last_pull')
+                   or _ago(row.get('last_pull')) > PULL_MINUTES * 60
                    or prev.get('last_sync') != p.get('last_sync') or row.get('dataset') != p.get('dataset'))
             got[p['id']] = pull(p) if due else 0
             if not due:
@@ -377,7 +447,8 @@ def primary_source(live=None, rows=None):
     rows = rows if rows is not None else _source_rows()
     live = live if live is not None else {p['id']: p for p in probe_all()}
     chosen = _setting('primary')
-    if chosen and (chosen in rows or chosen in live):
+    # an owner's pick that is off right now is skipped (kept saved: it is the main source again once it is back)
+    if chosen and (chosen in rows or chosen in live) and not is_gone(live.get(chosen)):
         return chosen
     order = sorted(set(live) | set(rows), key=_rank)
     connected = [s for s in order if s in live and live[s]['status'] in LIVE]
@@ -386,7 +457,7 @@ def primary_source(live=None, rows=None):
             return sid
     if connected:
         return connected[0]
-    with_data = [sid for sid in order if rows.get(sid, {}).get('days')]
+    with_data = [sid for sid in order if rows.get(sid, {}).get('days') and not is_gone(live.get(sid))]
     if with_data:
         return with_data[0]
     return next((s for s in order if s in live), None)
@@ -401,7 +472,7 @@ def _state(status, installed, connected, last_sync):
         return 'needs_update'
     if connected:
         return 'stale' if _ago(last_sync) > STALE_HOURS * 3600 else 'connected'
-    return {'not_configured': 'not_set_up', 'needs_login': 'sign_in'}.get(status, 'error')
+    return {'not_configured': 'not_set_up', 'disconnected': 'not_set_up', 'needs_login': 'sign_in'}.get(status, 'error')
 
 
 def sources_info():
@@ -412,6 +483,16 @@ def sources_info():
     out = []
     for sid in sorted(set(live) | set(rows), key=_rank):
         p, r = live.get(sid), rows.get(sid, {})
+        off = is_gone(p)
+        held = r.get('days', 0)
+        # an off source's days are not used: report none, and when the held copy will be purged
+        gone_at = r.get('gone_since') if off else None
+        purge_at = None
+        if off and held and gone_at:
+            try:
+                purge_at = _iso(dt.datetime.fromisoformat(gone_at.replace('Z', '+00:00')) + dt.timedelta(hours=GONE_PURGE_HOURS))
+            except ValueError:
+                purge_at = None
         prev = json.loads(r['status']) if r.get('status') else {}
         base = p or prev or {}
         status = p['status'] if p else 'not_installed'
@@ -425,7 +506,8 @@ def sources_info():
                     'connected': connected, 'account': base.get('account'),
                     'last_sync': base.get('last_sync'), 'next_sync': base.get('next_sync') if p else None,
                     'last_pull': r.get('last_pull'), 'pull_error': r.get('pull_error'), 'error': base.get('error') if p else None,
-                    'days': r.get('days', 0), 'first_date': r.get('first_date'), 'latest_date': r.get('last_date'),
+                    'days': 0 if off else held, 'held_days': held, 'off_since': gone_at, 'purge_at': purge_at,
+                    'first_date': None if off else r.get('first_date'), 'latest_date': None if off else r.get('last_date'),
                     'scales': scales, 'has_readiness': base.get('has_readiness', _has_readiness(scales)), 'primary': sid == primary})
     have = {s['id']: s for s in out}
     connectors = [{'id': k['id'], 'name': k['name'], 'app_path': k['app_path'], 'blurb': k['blurb'],
@@ -471,14 +553,17 @@ def _source_arg(args):
 def _view(args):
     """What a read covers: (main source, the sources in order whose days are merged). An explicit `source` reads that
     one source alone; otherwise the main source, with any metric it lacks on a day filled from the other sources."""
+    live = {p['id']: p for p in probe_all()}
+    off = hidden_sources(live)
     if args.get('source'):
         sid = _source_arg(args)
-        return sid, [sid]
-    sid = primary_source()
+        return sid, [] if sid in off else [sid]
+    rows = _source_rows()
+    sid = primary_source(live, rows)
     if not sid:
         return None, []
-    others = sorted((s for s, r in _source_rows().items() if s != sid and r.get('days')), key=_rank)
-    return sid, [sid] + others
+    others = sorted((s for s, r in rows.items() if s != sid and r.get('days') and s not in off), key=_rank)
+    return sid, ([] if sid in off else [sid]) + others
 
 
 def _check_day(v, name):

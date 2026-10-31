@@ -29,6 +29,11 @@ The same file lives in both repos (`wizard-whoop/docs/` and `wizard-health/docs/
 
 ## Several sources (front end behaviour)
 
+- A source whose status is `not_configured` or `disconnected`, or that is no longer discovered (uninstalled), stops
+  counting at once: the front end leaves its days out of every read. It deletes its copy only after the source has
+  stayed off for 24 h in a row (a connector restart never wipes anything) and reads the source again from the start
+  when it is back. `needs_login` and errors are not off: the data stays in use.
+
 - The owner picks one **main source** when two or more are connected (saved by the front end, server-side). Until
   then the main source is the first connected one in this order: WHOOP, Oura, Fitbit, Polar, Withings, then any
   other.

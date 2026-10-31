@@ -645,7 +645,7 @@ function goBack() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.10.0' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.10.1' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();

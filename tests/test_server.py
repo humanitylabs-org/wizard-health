@@ -243,7 +243,8 @@ class HealthTest(unittest.TestCase):
         self.srv_o.shutdown(); self.srv_o.server_close()
         S.probe_all(fresh=True)
         o = next(s for s in S.sources_info()['sources'] if s['id'] == 'fake-oura')
-        self.assertEqual((o['installed'], o['status'], o['days']), (False, 'not_installed', 3))
+        # kept for now (purged after 24 h off) but no longer used: no days count, held_days says what is kept
+        self.assertEqual((o['installed'], o['status'], o['days'], o['held_days']), (False, 'not_installed', 0, 3))
         with self.assertRaises(S.Problem):
             S.forget_source({'id': 'wizard-whoop'})       # still installed
         S.forget_source({'id': 'fake-oura'})
@@ -540,6 +541,169 @@ class MultiSourceTest(unittest.TestCase):
             m = self.S.activity_match(v, r, loads[i])
             py.append([light[m['colour']], m['target'].replace('-', '\u2013')] if m else None)
         self.assertEqual(json.loads(js), py)
+
+
+class PresenceTest(unittest.TestCase):
+    """0.10.1: a source that is not set up / disconnected, or no longer discovered (uninstalled), stops counting at
+    once; its stored days are purged only after 24 h off in a row (a restart never wipes anything); when it is back
+    Health reads it again from the start. WHOOP's rows are never touched while WHOOP is connected."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(ROOT / 'app'))
+        import server
+        cls.S = S = importlib.reload(server)
+        cls.saved = (S.GRANTS_FILE, S.ENV_SOURCES, S.DATA, S.KNOWN)
+        cls.tmp = Path(tempfile.mkdtemp())
+
+    @classmethod
+    def tearDownClass(cls):
+        S = cls.S
+        S.GRANTS_FILE, S.ENV_SOURCES, S.DATA, S.KNOWN = cls.saved
+        S._PROBE.update(at=0, list=None)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        S = self.S
+        self.whoop = Connector('wizard-whoop', 'WHOOP', 'whoop', 'Strain', 21, 10)
+        self.oura = Connector('wizard-oura', 'Oura', 'oura', 'Activity', 100, 12)    # two days older than WHOOP's
+        self.srv = {c.sid: serve(c.handler()) for c in (self.whoop, self.oura)}
+        self.url = {sid: f'http://127.0.0.1:{s.server_address[1]}' for sid, s in self.srv.items()}
+        S.DATA = self.tmp / ('data-' + self._testMethodName)
+        self.grants = self.tmp / ('grants-' + self._testMethodName + '.json')
+        S.GRANTS_FILE, S.ENV_SOURCES = str(self.grants), []
+        S.KNOWN = [dict(k, base='http://127.0.0.1:9') for k in self.saved[3]]
+        self.listed(['wizard-whoop', 'wizard-oura'])
+        S.pull_all(force=True)
+
+    def tearDown(self):
+        for s in self.srv.values():
+            s.shutdown(); s.server_close()
+
+    def listed(self, ids):
+        """What the App Manager grants: the providers installed right now."""
+        self.grants.write_text(json.dumps({'provider_endpoints_all': {'slot:health-data': {i: self.url[i] for i in ids}}}))
+        self.S._PROBE.update(at=0, list=None)
+
+    def held(self, sid):
+        c = self.S.db()
+        try:
+            return c.execute('SELECT COUNT(*) FROM days WHERE source=?', (sid,)).fetchone()[0]
+        finally:
+            c.close()
+
+    def whoop_rows(self):
+        c = self.S.db()
+        try:
+            return c.execute("SELECT date, data, pulled_at FROM days WHERE source='wizard-whoop' ORDER BY date").fetchall()
+        finally:
+            c.close()
+
+    def age(self, sid, hours):
+        """Pretend the source went off `hours` ago."""
+        t = self.S._iso(self.S._now() - dt.timedelta(hours=hours))
+        self.S._exec('UPDATE sources SET gone_since=? WHERE id=?', (t, sid))
+
+    def src(self, sid):
+        return next((x for x in self.S.sources_info()['sources'] if x['id'] == sid), None)
+
+    def oldest(self):
+        """The two oldest days only Oura has: the merged view shows them only while Oura counts."""
+        return self.S.days_list({'from': (END - dt.timedelta(days=11)).isoformat(), 'to': (END - dt.timedelta(days=10)).isoformat()})['days']
+
+    def test_1_disconnect(self):
+        S = self.S
+        S.set_primary({'id': 'wizard-oura'})
+        self.assertEqual(S.daily_summary()['source'], 'wizard-oura')
+        self.assertEqual(len(self.oldest()), 2)
+        before = self.whoop_rows()
+        for status in ('not_configured', 'disconnected'):
+            self.oura.status = status
+            S.pull_all(force=True)
+            # stops counting at once: not the main source, nothing filled from it, its own read is empty
+            self.assertEqual(S.daily_summary()['source'], 'wizard-whoop')
+            self.assertEqual(self.oldest(), [])
+            self.assertEqual(S.days_list({'source': 'wizard-oura'})['days'], [])
+            self.assertTrue(all('wizard-oura' not in d['origins'].values() for d in S.days_list({})['days']))
+            o = self.src('wizard-oura')
+            self.assertEqual((o['days'], o['held_days'], o['installed']), (0, 12, True))
+            self.assertIsNotNone(o['purge_at'])
+            self.assertEqual(self.held('wizard-oura'), 12)            # kept for now
+        self.assertEqual(S._setting('primary'), 'wizard-oura')        # the owner's pick is kept for when it is back
+        self.age('wizard-oura', 23)
+        S.pull_all(force=True)
+        self.assertEqual(self.held('wizard-oura'), 12)                # under 24 h: still kept
+        self.age('wizard-oura', 25)
+        S.pull_all(force=True)
+        self.assertEqual(self.held('wizard-oura'), 0)                 # purged
+        self.assertEqual(self.src('wizard-oura')['state'], 'not_set_up')   # still listed: it is installed
+        self.assertEqual(self.whoop_rows(), before)                   # WHOOP untouched throughout
+        self.assertEqual(S.daily_summary()['source'], 'wizard-whoop')
+
+    def test_2_uninstall(self):
+        S = self.S
+        S.set_primary({'id': 'wizard-oura'})
+        before = self.whoop_rows()
+        self.listed(['wizard-whoop'])                                  # Oura uninstalled
+        self.srv['wizard-oura'].shutdown()
+        S.pull_all(force=True)
+        o = self.src('wizard-oura')
+        self.assertEqual((o['installed'], o['state'], o['days'], o['held_days']), (False, 'not_installed', 0, 12))
+        self.assertEqual(self.oldest(), [])
+        self.assertEqual(S.daily_summary()['source'], 'wizard-whoop')
+        self.age('wizard-oura', 25)
+        S.pull_all(force=True)
+        self.assertEqual(self.held('wizard-oura'), 0)
+        self.assertIsNone(self.src('wizard-oura'))                     # forgotten entirely
+        self.assertIsNone(S._setting('primary'))                       # its pick goes back to auto
+        self.assertEqual(self.whoop_rows(), before)
+
+    def test_3_brief_outage_keeps_data(self):
+        S = self.S
+        n = self.held('wizard-whoop')
+        self.listed(['wizard-oura'])                                   # WHOOP restarting: not found for a moment
+        S.pull_all(force=True)
+        self.assertEqual(S.daily_summary()['source'], 'wizard-oura')   # its days are not used meanwhile
+        self.assertEqual(self.held('wizard-whoop'), n)
+        self.age('wizard-whoop', 2)
+        S.pull_all(force=True)
+        self.listed(['wizard-whoop', 'wizard-oura'])                   # back well inside 24 h
+        self.whoop.calls.clear()
+        S.pull_all()
+        self.assertEqual(self.held('wizard-whoop'), n)                 # nothing was wiped
+        self.assertEqual(S.daily_summary()['source'], 'wizard-whoop')
+        self.assertIsNone(self.src('wizard-whoop')['off_since'])
+        self.assertIn(('/api/days', {'changed_since': '', 'limit': '500'}), self.whoop.calls)   # read again from the start
+        # Health's own restart: an off stamp from before is cleared by the first probe that finds the source
+        self.age('wizard-whoop', 30)
+        S._exec("UPDATE sources SET gone_since=NULL WHERE id='wizard-whoop'")
+        S.pull_all(force=True)
+        self.assertEqual(self.held('wizard-whoop'), n)
+
+    def test_4_reconnect_repulls(self):
+        S = self.S
+        self.oura.status = 'not_configured'
+        S.pull_all(force=True)
+        self.age('wizard-oura', 25)
+        S.pull_all(force=True)
+        self.assertEqual(self.held('wizard-oura'), 0)
+        self.oura.status = 'connected'                                 # set up again, same copy on the connector
+        self.oura.calls.clear()
+        S._PROBE.update(at=0, list=None)
+        S.pull_all()
+        self.assertEqual(self.held('wizard-oura'), 12)                 # everything read again, not just changes
+        self.assertEqual(self.src('wizard-oura')['days'], 12)
+        self.assertEqual(len(self.oldest()), 2)
+        # reconnect inside 24 h: also read from the start
+        self.oura.status = 'not_configured'
+        S.pull_all(force=True)
+        self.assertEqual(self.oldest(), [])
+        self.oura.status = 'connected'
+        self.oura.calls.clear()
+        S._PROBE.update(at=0, list=None)
+        S.pull_all()
+        self.assertIn(('/api/days', {'changed_since': '', 'limit': '500'}), self.oura.calls)
+        self.assertEqual(len(self.oldest()), 2)
 
 
 class ViewTest(unittest.TestCase):
