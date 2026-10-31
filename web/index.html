@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en" data-app="wizard-health">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>Health</title>
+  <script src="boot.js"></script>
+  <link rel="stylesheet" href="wizard-tokens.css">
+  <!-- the shell's live tokens (success/warning roles the pinned snapshot predates); missing outside Wizard is fine -->
+  <link rel="stylesheet" href="/wizard-os-home/kit/wizard-tokens.css">
+  <link rel="stylesheet" href="wizard-ui.css">
+  <link rel="stylesheet" href="standalone.css">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="/wizard-os-home/core/app-client.js"></script>
+  <script defer src="wizard-sheet.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="wz-app hl-app">
+    <main class="wz-scroll hl-scroll" id="main">
+      <!-- Nothing connected yet: one big button to the connector app; Health never takes keys itself -->
+      <section id="empty" class="hl-empty" hidden>
+        <a class="hl-connect" id="connect" href="#">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 41s-15-8.6-15-20a8.5 8.5 0 0 1 15-5.5A8.5 8.5 0 0 1 39 21c0 11.4-15 20-15 20z"/><path d="M10 24h8l3-6 5 12 3-6h9"/></svg>
+          <span>Connect a source</span>
+        </a>
+        <i class="hl-wait" id="wait" hidden></i>
+      </section>
+
+      <section id="screen" class="hl-screen" hidden>
+        <!-- One metric at a time: it fills the focus card and colours the squares -->
+        <header class="hl-top">
+          <div class="hl-seg" id="metric" role="radiogroup" aria-label="Show">
+            <button type="button" role="radio" data-m="recovery" aria-checked="true">Recovery</button>
+            <button type="button" role="radio" data-m="sleep" aria-checked="false">Sleep</button>
+            <button type="button" role="radio" data-m="activity" aria-checked="false">Activity</button>
+          </div>
+          <!-- Source freshness: one dot; its sheet lists the sources -->
+          <button type="button" class="hl-srcdot" id="srcdot" aria-label="Sources"><i></i></button>
+        </header>
+
+        <!-- The selected metric on the selected day (today unless a square below is tapped), in one plain sentence -->
+        <section class="hl-focus" id="focus" aria-live="polite">
+          <div class="hl-fhead">
+            <h1 class="hl-day" id="date"></h1>
+            <button type="button" class="hl-today" id="today" aria-label="Back to today" hidden>Today</button>
+          </div>
+          <div class="hl-fmain">
+            <div class="hl-fval"><b id="fnum"></b><small id="fof"></small><span class="hl-chip" id="fchip" hidden></span></div>
+            <div class="hl-bar" id="fbar" hidden><i></i></div>
+          </div>
+          <div class="hl-fside">
+            <p class="hl-say" id="fsay"></p>
+            <button type="button" class="hl-more" id="fmore">Why?</button>
+          </div>
+        </section>
+
+        <!-- Every day as a square, like a GitHub contribution graph: weeks are columns, Sunday to Saturday rows -->
+        <section class="hl-graph" id="graph" aria-label="Every day">
+          <p class="hl-cap" id="cap"></p>
+          <div class="hl-gwrap">
+            <div class="hl-wd" aria-hidden="true"><span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span></div>
+            <div class="hl-gscroll" id="gscroll">
+              <div class="hl-gin" id="gin">
+                <div class="hl-months" id="months" aria-hidden="true"></div>
+                <div class="hl-cells" id="cells"></div>
+              </div>
+            </div>
+          </div>
+          <div class="hl-foot">
+            <span class="hl-nodata"><i class="hl-cell"></i>No data</span>
+            <span class="hl-legend" id="legend"></span>
+          </div>
+          <div class="hl-tip" id="tip" role="status" hidden></div>
+        </section>
+      </section>
+    </main>
+    <p id="status" class="wz-status wz-sr" role="status" aria-live="polite"></p>
+  </div>
+  <dialog class="wz-sheet hl-sheet" id="sheet" aria-labelledby="sheet-h"><div id="sheet-body"></div></dialog>
+</body>
+</html>
