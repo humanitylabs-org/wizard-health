@@ -4,41 +4,29 @@
 /* Colours. Sheets sit outside .wz-app in the DOM, so they get the same roles.
  * Built from the kit's own success/warning/danger roles; never from --danger alone, which some
  * monochrome skins draw near-black. Red turns the kit's pink-red danger toward its deep amber (hue mix in oklch) so it reads as red.
- * Sleep is one green and Activity one blue, each in five steps from faint to full, as on GitHub. The summary cards wear
- * the same classes, so a card is always filled with its day's square colour. */
+ * One traffic light for all three metrics (Recovery, Sleep and Activity): green good, yellow okay, red needs attention,
+ * grey no data. The summary cards wear the same classes, so a card is always filled with its day's square colour. */
 .wz-app, .wz-sheet {
   --hi: var(--wz-success, var(--accent));
   --md: color-mix(in oklab, var(--wz-warning, var(--accent)) 86%, var(--wz-success, var(--accent)));
   --lo: color-mix(in oklch, var(--wz-danger, var(--accent)) 72%, var(--wz-warning-light, var(--accent)));
-  --grn: var(--hi);
   --acc: var(--accent);
-  --cell0: color-mix(in srgb, var(--ink) 10%, transparent);
-  /* the low end of the steps is solid (ink faintly over the skin's base), so a step drawn as a card fill is exactly the
-   * colour of its square and text contrast on it is measurable */
+  /* grey (no data) is solid (ink faintly over the skin's base), so a grey card is exactly the colour of its square and
+   * text contrast on it is measurable */
   --cellbase: color-mix(in srgb, var(--ink) 10%, var(--canvas));
+  --cell0: var(--cellbase);
   --cell-edge: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 html[data-color-scheme="light"] .wz-app, html[data-color-scheme="light"] .wz-sheet {
   --hi: color-mix(in oklab, var(--wz-success-light, var(--accent)) 82%, var(--wz-success, var(--accent)));
   --md: color-mix(in oklab, var(--wz-warning, var(--accent)) 74%, var(--wz-warning-light, var(--accent)));
   --lo: color-mix(in oklch, var(--wz-danger, var(--accent)) 56%, var(--wz-warning-light, var(--accent)));
-  --cell0: color-mix(in srgb, var(--ink) 8%, transparent);
   --cellbase: color-mix(in srgb, var(--ink) 8%, var(--canvas));
 }
 .c-hi { --c: var(--hi); } .c-md { --c: var(--md); } .c-lo { --c: var(--lo); }
-.c-g { --hue: var(--grn); } .c-a { --hue: var(--blu); }
-/* Activity blue: the long way round the hue circle from this scheme's green to its red (WHOOP draws strain blue), so it
- * follows light/dark and never turns grey in monochrome skins whose accent is ink. */
-.wz-app, .wz-sheet { --blu: color-mix(in oklch longer hue, var(--hi) 50%, var(--lo)); }
-.c-1 { --c: color-mix(in srgb, var(--hue) 28%, var(--cellbase)); }
-.c-2 { --c: color-mix(in srgb, var(--hue) 46%, var(--cellbase)); }
-.c-3 { --c: color-mix(in srgb, var(--hue) 64%, var(--cellbase)); }
-.c-4 { --c: color-mix(in srgb, var(--hue) 82%, var(--cellbase)); }
-.c-5 { --c: var(--hue); }
-/* Light skins: the fullest green and blue sit a touch deeper (toward the ink), as GitHub's darkest square does, so the
- * skin's paper colour reads on a card filled with them (4.5:1 or better). */
+/* Light skins: the green sits a touch deeper (toward the ink) so the skin's paper colour reads on a card filled with it
+ * (4.5:1 or better). */
 html[data-color-scheme="light"] .c-hi { --c: color-mix(in oklab, var(--hi) 86%, var(--ink)); }
-html[data-color-scheme="light"] .c-5 { --c: color-mix(in oklab, var(--hue) 86%, var(--ink)); }
 
 .hl-app { height: 100%; }
 /* Bottom clearance. In a phone window the shell ends the frame above its dock, so the safe area is enough. In full screen
@@ -131,12 +119,10 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-cell.hl-future { visibility: hidden; }
 .hl-cells .hl-cell.on { outline: 2px solid var(--ink); outline-offset: 1px; }
 .hl-cells .hl-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* the legend sits under the squares */
-.hl-foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin: 12px 0 0 6px; font-size: 12.5px; color: var(--ink-2); }
-.hl-nodata, .hl-legend { display: inline-flex; align-items: center; gap: 4px; }
-.hl-nodata { gap: 6px; }
-.hl-legend span { margin: 0 3px; }
-.hl-foot .hl-cell { width: 13px; height: 13px; border-radius: 3px; cursor: default; }
+/* one legend under all the graphs: what the three colours mean, in plain words */
+.hl-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; margin: 2px 0 0; padding: 0 4px; font-size: 13px; color: var(--ink-2); }
+.hl-key { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.hl-legend .hl-cell { width: 13px; height: 13px; border-radius: 3px; cursor: default; }
 .hl-tip { position: absolute; z-index: 5; padding: 5px 9px; border-radius: 6px; background: var(--ink); color: var(--canvas); font-size: 12px; font-weight: 600; white-space: nowrap; pointer-events: none; }
 .hl-tip::after { content: ""; position: absolute; top: 100%; left: calc(var(--ax, 50%) - 5px); border: 5px solid transparent; border-top-color: var(--ink); }
 
@@ -158,10 +144,11 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @container wz-app (min-width: 680px) {
   .hl-dock { display: none; }
   .hl-screen { gap: 8px; padding-top: 6px; }
-  .hl-panels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(4, auto); column-gap: 12px; row-gap: 10px; }
-  /* rows: title, card, then the graph box's squares and legend, each lined up across the three columns */
-  .hl-panel { grid-row: span 4; grid-template-rows: subgrid; gap: 10px; }
-  .hl-graph { grid-row: span 2; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: subgrid; row-gap: 0; align-content: start; }
+  .hl-panels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, auto); column-gap: 12px; row-gap: 10px; }
+  /* rows: title, card, graph, each lined up across the three columns; the one legend sits under all three */
+  .hl-panel { grid-row: span 3; grid-template-rows: subgrid; gap: 10px; }
+  .hl-graph { align-self: start; }
+  .hl-legend { justify-content: center; font-size: 12.5px; }
   .hl-title { align-self: start; padding-right: 4px; font-size: 15px; }
   .hl-panel[data-m="activity"] .hl-title { padding-right: 30px; }   /* clear of the sources dot */
   .hl-focus { padding: 14px 14px 10px; }
@@ -172,18 +159,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .hl-kv dd b { font-size: 13.5px; }
   .hl-graph { padding: 12px 8px 10px 4px; }
   .hl-wd { width: 28px; font-size: 11px; }
-  .hl-foot { gap: 6px 10px; margin-top: 10px; font-size: 12px; justify-content: flex-start; }
-  .hl-foot > span { white-space: nowrap; }
-  .hl-foot .hl-legend { margin-left: auto; }
-  .hl-foot .hl-cell { width: 11px; height: 11px; }
-  .hl-legend span { margin: 0 2px; }
 }
 /* tiled desktop windows: three slim columns; the legend gets its own line, glosses tuck under values */
 @container wz-app (min-width: 680px) and (max-width: 959.98px) {
-  .hl-foot { font-size: 11.5px; }
-  .hl-foot .hl-legend { margin-left: 0; }
-  .hl-foot .hl-cell { width: 10px; height: 10px; }
-  .hl-legend span { margin: 0 1px; }
   .hl-fval b { font-size: 34px; }
   .hl-focus { padding: 12px 12px 8px; }
   .hl-title .tgloss { display: block; font-size: 13px; }

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Health API",
-    "version": "0.8.0",
+    "version": "0.9.0",
     "description": "Box-local API of the Health app. It reads health-data connectors (docs/health-data-contract.md) and never holds provider keys."
   },
   "paths": {
@@ -55,7 +55,8 @@
           "200": {
             "description": "OK"
           }
-        }
+        },
+        "description": "Includes the screen's one traffic light (green good, yellow okay, red needs attention): recovery_colour; sleep_band {colour, word, pct_of_need, by}; activity_match {colour, word, side, strain, target, target_low, target_high}, judged against that day's recovery."
       }
     },
     "/api/days": {
@@ -102,7 +103,8 @@
           "200": {
             "description": "OK"
           }
-        }
+        },
+        "description": "Each day also carries recovery_colour, sleep_band and activity_match (as in /api/summary)."
       }
     },
     "/api/trends": {

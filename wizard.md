@@ -4,7 +4,7 @@ id: wizard-health
 name: Health
 type: view
 category: app
-version: 0.8.0
+version: 0.9.0
 summary: Your recovery, sleep and activity from a wearable like WHOOP, each in one plain sentence, with every day as a square like a GitHub graph.
 tags: [data]
 license: GPL-3.0-only
@@ -39,11 +39,13 @@ health: /healthz
 
 # Health
 
-A health tracker over the wearables you connect, in plain words. Recovery, Sleep and Activity each get:
+A health tracker over the wearables you connect, in plain words, with one traffic light for everything: **green good, yellow okay, red needs attention** (grey = no data). Glance at it and read "green, green, green" or "green, yellow, yellow".
 
-- **A plain question** ("How ready is your body today?").
-- **One card for that day** (today unless you tap another day): a big number, a coloured word (Recovery Ready/So-so/Run down; Sleep Enough/A bit short/Short against what your body needed; Activity Light/Moderate/High/All out on a 0–21 scale) and one sentence anyone understands, such as "Your body is partly recovered. A normal day is fine; skip anything very hard." **Why?** / **More** opens the last 30 days and the numbers behind it (heart rate variability, resting heart rate, blood oxygen and skin temperature; sleep stages; calories and workouts).
-- **Every day as a square**, like a GitHub contribution graph: weeks run left to right with the newest on the right, Sunday to Saturday top to bottom. Tap a square to see that day everywhere (a Today pill and Back return to today).
+- **Recovery · how ready your body is**: Ready (67–100) green, So-so (34–66) yellow, Run down (0–33) red.
+- **Sleep · did you get enough**: judged against what your body needed. 85% of your need or more is green (Enough), 70–85% yellow (A bit short), under 70% red (Short).
+- **Activity · did it match your recovery**: effort is not good or bad by itself, so Health compares it with that day's recovery (WHOOP's guidance: Ready about 14–18 on the 0–21 scale, So-so about 10–14, Run down under 10). Inside the target, or resting on a run-down day, is green (Right amount); a little outside is yellow (A bit much / Room to push); well over is red (Too much for today). Doing less is never red.
+
+Each gets one card for the selected day, filled with that day's colour: a big number, a word, one plain sentence and the few numbers behind it (heart rate variability, resting heart rate, blood oxygen and skin temperature; sleep stages; the day's target, calories, steps and workouts). Below it, **every day as a square**, like a GitHub contribution graph, with one shared legend. Tap a square to see that day everywhere (Back to today and Back return to today).
 
 In a wide window all three sit side by side and move together. In a narrow window (a phone) you see one at a time and pick Recovery, Sleep or Activity in a bar at the bottom, within reach of your thumb; the squares are big enough to tap, about the last three months fit the screen and older weeks scroll sideways.
 

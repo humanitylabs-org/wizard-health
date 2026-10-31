@@ -36,12 +36,14 @@
           <button type="button" class="hl-srcdot" id="srcdot" aria-label="Sources"><i></i></button>
         </header>
         <!-- Recovery, Sleep and Activity: all three side by side in a wide window, one at a time (picked in the bottom bar) in a
-             narrow one. Each reads: title, a summary card coloured like the shown day's square, the graph, a tiny legend. -->
+             narrow one. Each reads: title, a summary card coloured like the shown day's square, the graph. One legend under all three. -->
         <div class="hl-panels" id="panels">
           <article class="hl-panel" data-m="recovery" aria-label="Recovery"></article>
           <article class="hl-panel" data-m="sleep" aria-label="Sleep"></article>
           <article class="hl-panel" data-m="activity" aria-label="Activity"></article>
         </div>
+        <!-- One legend for all three graphs: the same green / yellow / red everywhere, in plain words -->
+        <p class="hl-legend" id="legend" role="img"></p>
       </section>
     </main>
     <!-- Narrow windows: the picker is a thumb bar at the bottom of the window, below the content (never over it) -->
@@ -75,10 +77,6 @@
             <div class="hl-cells"></div>
           </div>
         </div>
-      </div>
-      <div class="hl-foot">
-        <span class="hl-nodata"><i class="hl-cell"></i>No data</span>
-        <span class="hl-legend"></span>
       </div>
       <div class="hl-tip" role="status" hidden></div>
     </section>

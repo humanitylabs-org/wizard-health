@@ -7,26 +7,59 @@
   // Recovery, WHOOP's bands: 0-33 red, 34-66 yellow, 67-100 green. The same three words everywhere (card, legend).
   const recBand = v => !num(v) ? null : v >= 67 ? 'hi' : v >= 34 ? 'md' : 'lo';
   const REC_WORD = { hi: 'Ready', md: 'So-so', lo: 'Run down' };
-  // Sleep against need: Enough at 85% or more, A bit short at 70-85%, Short below 70%.
-  const sleepBand = (h, need) => !num(h) || !num(need) || need <= 0 ? null : h / need >= 0.85 ? 'hi' : h / need >= 0.70 ? 'md' : 'lo';
+  // One traffic light for all three metrics: 'hi' green (good), 'md' yellow (okay), 'lo' red (needs attention), null grey.
+  // Sleep against need: Enough at 85% or more, A bit short at 70-85%, Short below 70%. Without a need, by hours:
+  // 7h or more, 6-7h, under 6h.
+  const sleepBand = (h, need) => !num(h) ? null
+    : num(need) && need > 0 ? (h / need >= 0.85 ? 'hi' : h / need >= 0.70 ? 'md' : 'lo')
+    : h >= 7 ? 'hi' : h >= 6 ? 'md' : 'lo';
   const SLEEP_WORD = { hi: 'Enough', md: 'A bit short', lo: 'Short' };
-  // Activity, WHOOP's strain bands: under 10, 10-14, 14-18, 18 and over.
+  // Activity, WHOOP's strain bands (under 10, 10-14, 14-18, 18 and over): the tooltip's plain word for the effort.
   const actWord = v => !num(v) ? null : v >= 18 ? 'All out' : v >= 14 ? 'High' : v >= 10 ? 'Moderate' : 'Light';
+  // Activity is judged against that day's recovery (WHOOP's own guidance): the target effort for each recovery band.
+  const TARGET = { hi: [14, 18], md: [10, 14], lo: [0, 10] };
+  const SLACK = 3;   // this far outside the target is "a little": yellow
+  const targetText = b => !TARGET[b] ? '' : b === 'lo' ? 'under 10' : TARGET[b][0] + '\u2013' + TARGET[b][1];
+  // How well a day's effort matched its recovery: { band, side, word } or null when either is missing.
+  //  green: inside the target, or below it on a Run down day (rest is right);
+  //  yellow: below the target ("Room to push", never red), or up to 3 above ("A bit much");
+  //  red: more than 3 above ("Too much for today").
+  // The value is rounded to one decimal first, as the screen shows it, so the colour matches the number.
+  function actMatch(strain, score) {
+    const r = recBand(score);
+    if (!num(strain) || !r) return null;
+    const v = Math.round(strain * 10) / 10, [lo, hi] = TARGET[r];
+    if (v > hi + SLACK) return { band: 'lo', side: 'over', word: 'Too much for today' };
+    if (v > hi) return { band: 'md', side: 'over', word: 'A bit much' };
+    if (v >= lo || r === 'lo') return { band: 'hi', side: 'in', word: 'Right amount' };
+    return { band: 'md', side: 'under', word: 'Room to push' };
+  }
+  const MATCH_SAY = {
+    now: { in: 'Right amount for how recovered you are.', rest: 'Taking it easy is right today.', under: 'You have room to push harder.',
+      over: 'A little more than your body is ready for.', much: 'More than your body is ready for.' },
+    past: { in: 'Right amount for how recovered you were.', rest: 'Taking it easy was right that day.', under: 'You had room to push harder.',
+      over: 'A little more than your body was ready for.', much: 'More than your body was ready for.' },
+  };
+  function matchSay(m, score, past) {
+    const S = MATCH_SAY[past ? 'past' : 'now'];
+    if (!m) return '';
+    if (m.side === 'in') return recBand(score) === 'lo' && num(score) ? S.rest : S.in;
+    if (m.side === 'under') return S.under;
+    return m.band === 'lo' ? S.much : S.over;
+  }
 
   // One short summary per card.
   const REC_SAY = {
     now: { hi: 'Well recovered. A good day to push.', md: 'Partly recovered. A normal day is fine.', lo: 'Not recovered. Take it easy today.' },
     past: { hi: 'Well recovered. A good day to push.', md: 'Partly recovered. A normal day was fine.', lo: 'Not recovered. A day to take it easy.' },
   };
-  const ACT_SAY = { 'Light': 'A light day, no hard push.', 'Moderate': 'A moderate day with some real effort.',
-    'High': 'A hard day for your heart.', 'All out': 'An all-out day. Plan to recover.' };
 
   // Each metric's title says what it is, so no separate question is needed. Only Recovery adds one line: how it
   // differs from sleep (beginners find the two confusing).
   const TITLE = {
     recovery: { name: 'Recovery', gloss: 'how ready your body is', sub: 'Read from your heart overnight, not just your sleep.' },
-    sleep: { name: 'Sleep', gloss: 'time asleep vs what you needed' },
-    activity: { name: 'Activity', gloss: 'how hard your body worked' },
+    sleep: { name: 'Sleep', gloss: 'did you get enough' },
+    activity: { name: 'Activity', gloss: 'did it match your recovery' },
   };
   const title = metric => { const t = TITLE[metric]; return t ? { name: t.name, gloss: t.gloss, sub: t.sub || '' } : { name: '', gloss: '', sub: '' }; };
 
@@ -41,7 +74,7 @@
   // When sleep and recovery disagree, one short sentence says why: recovery is read from the heart, not hours asleep.
   // Short sleep but Ready/So-so recovery, or Enough sleep but So-so/Run down recovery. Otherwise nothing.
   function recoveryVsSleep(score, asleepH, needH, past) {
-    const r = recBand(score), s = sleepBand(asleepH, needH);
+    const r = recBand(score), s = num(needH) ? sleepBand(asleepH, needH) : null;   // only against a real need
     if (!r || !s) return '';
     if (s === 'lo' && r === 'hi') return 'Short sleep, but your heart handled it.';
     if (s === 'lo' && r === 'md') return 'Short sleep, but your heart held up okay.';
@@ -56,6 +89,6 @@
   const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
   const betterInk = (fill, inkA, inkB) => contrast(fill, inkA) >= contrast(fill, inkB) ? 'a' : 'b';
 
-  const W = { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, REC_SAY, ACT_SAY, TITLE, title, sleepSay, recoveryVsSleep, contrast, betterInk };
+  const W = { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, TARGET, targetText, actMatch, MATCH_SAY, matchSay, REC_SAY, TITLE, title, sleepSay, recoveryVsSleep, contrast, betterInk };
   if (typeof module === 'object' && module.exports) module.exports = W; else root.HealthWords = W;
 })(typeof window !== 'undefined' ? window : globalThis);

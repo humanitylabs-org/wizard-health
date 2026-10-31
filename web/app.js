@@ -29,7 +29,7 @@ async function api(path, data) {
 }
 function h(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
 function s(tag, attrs) { const n = document.createElementNS(SVG, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; }
-const { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, REC_SAY, ACT_SAY, title, sleepSay, recoveryVsSleep, betterInk } = window.HealthWords;
+const { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actMatch, matchSay, targetText, REC_SAY, title, sleepSay, recoveryVsSleep, betterInk } = window.HealthWords;
 const DASH = '\u2013';
 const hm = hours => { if (!num(hours)) return DASH; const m = Math.round(hours * 60); return Math.floor(m / 60) + 'h ' + (m % 60) + 'm'; };
 const addDays = (iso, n) => new Date(Date.parse(iso + 'T12:00:00Z') + n * DAY).toISOString().slice(0, 10);
@@ -91,35 +91,39 @@ const needH = d => ((d || {}).sleep || {}).need_h;
 const act = d => ((d || {}).load || {}).value;
 const actMax = d => ((d || {}).load || {}).max || labels().load_max || 21;
 const hrv = d => (d || {}).hrv_ms;
-// Bands and words live in words.js (Recovery 0-33/34-66/67-100; Activity under 10, 10-14, 14-18, 18 and over).
-const actLevel = v => !num(v) ? 0 : v >= 18 ? 5 : v >= 14 ? 4 : v >= 10 ? 3 : v >= 5 ? 2 : 1;
-const sleepLevel = v => !num(v) ? 0 : v >= 8 ? 5 : v >= 7 ? 4 : v >= 6 ? 3 : v >= 5 ? 2 : 1;
+// Bands and words live in words.js: one traffic light for all three (green good, yellow okay, red needs attention).
+// Recovery 67+/34-66/0-33; Sleep 85%+/70-85%/under 70% of need; Activity by how its effort matched that day's recovery.
+const sleepPct = d => num(sleepH(d)) && num(needH(d)) && needH(d) > 0 ? Math.round(100 * sleepH(d) / needH(d)) : null;
+const band = {
+  recovery: d => recBand(recov(d)),
+  sleep: d => sleepBand(sleepH(d), needH(d)),
+  activity: d => (actMatch(act(d), recov(d)) || {}).band || null,
+};
+// The one class every square and card wears: c-hi green, c-md yellow, c-lo red; no class = grey (no data).
+const LIGHT = { hi: 'c-hi', md: 'c-md', lo: 'c-lo' };
+const lightOf = (m, d) => LIGHT[band[m](d)] || '';
 
 // What each square means for each metric: its class (the summary card wears the very same class, so the card is always
-// the colour of the shown day's square), its tooltip words and the legend.
+// the colour of the shown day's square) and its tooltip words. One legend for all three lives under the graphs.
 const SCALE = {
   recovery: {
     name: 'Recovery',
-    cls: d => { const b = recBand(recov(d)); return b ? 'c-' + b : ''; },
+    cls: d => lightOf('recovery', d),
     tip: d => num(recov(d)) ? 'Recovery ' + Math.round(recov(d)) + '%, ' + REC_WORD[recBand(recov(d))].toLowerCase() : null,
-    ends: ['Run down', 'Ready'],
-    keys: [['c-lo', 'Run down, 0\u201333%'], ['c-md', 'So-so, 34\u201366%'], ['c-hi', 'Ready, 67\u2013100%']],
   },
   sleep: {
     name: 'Sleep',
-    cls: d => { const l = sleepLevel(sleepH(d)); return l ? 'c-g c-' + l : ''; },
-    tip: d => num(sleepH(d)) ? 'Sleep ' + hm(sleepH(d)) : null,
-    ends: ['Less sleep', 'More sleep'],
-    keys: [['c-g c-1', 'Under 5 hours'], ['c-g c-2', '5 to 6 hours'], ['c-g c-3', '6 to 7 hours'], ['c-g c-4', '7 to 8 hours'], ['c-g c-5', '8 hours or more']],
+    cls: d => lightOf('sleep', d),
+    tip: d => !num(sleepH(d)) ? null : 'Sleep ' + hm(sleepH(d)) + (num(sleepPct(d)) ? ' (' + sleepPct(d) + '% of need)' : '') + ', ' + SLEEP_WORD[band.sleep(d)].toLowerCase(),
   },
   activity: {
     name: 'Activity',
-    cls: d => { const l = actLevel(act(d)); return l ? 'c-a c-' + l : ''; },
-    tip: d => num(act(d)) ? 'Activity ' + act(d).toFixed(1) + ' out of ' + actMax(d) : null,
-    ends: ['Easier', 'Harder'],
-    keys: [['c-a c-1', 'Light, under 5'], ['c-a c-2', 'Light, 5 to 10'], ['c-a c-3', 'Moderate, 10 to 14'], ['c-a c-4', 'High, 14 to 18'], ['c-a c-5', 'All out, 18 or more']],
+    cls: d => lightOf('activity', d),
+    tip: d => { if (!num(act(d))) return null; const mt = actMatch(act(d), recov(d));
+      return 'Activity ' + act(d).toFixed(1) + ', ' + (mt ? mt.word.toLowerCase() : 'no recovery data'); },
   },
 };
+const LEGEND = [['c-hi', 'Green', 'good'], ['c-md', 'Yellow', 'okay'], ['c-lo', 'Red', 'needs attention'], ['', '', 'No data']];
 
 // ---------- the summary card: one metric, one day, one short summary, the key numbers ----------
 // A duration in words-light form: 4h 23m, or 40m under an hour.
@@ -134,12 +138,14 @@ function focusOf(metric, d, past) {
   if (metric === 'sleep') {
     const sh = sleepH(d), nd = needH(d), b = sleepBand(sh, nd);
     if (!num(sh)) return { value: DASH, say: 'No sleep recorded for this night.' };
-    if (!b) return { value: hm(sh), say: 'You slept ' + dur(sh) + '.' };
+    if (!num(nd) || nd <= 0) return { value: hm(sh), chip: SLEEP_WORD[b], say: 'You slept ' + dur(sh) + '.' };
     return { value: hm(sh), of: 'of ' + hm(nd) + ' needed', chip: SLEEP_WORD[b], say: sleepSay(Math.round(sh * 60), Math.round(nd * 60)) };
   }
-  const a = act(d), w = actWord(a);
-  if (!w) return { value: DASH, say: 'No activity recorded for this day.' };
-  return { value: a.toFixed(1), of: 'of ' + actMax(d), chip: w, say: ACT_SAY[w] };
+  const a = act(d);
+  if (!num(a)) return { value: DASH, say: 'No activity recorded for this day.' };
+  const mt = actMatch(a, recov(d));
+  if (!mt) return { value: a.toFixed(1), of: 'out of ' + actMax(d), chip: 'No recovery data', say: 'No recovery score, so no target for this day.' };
+  return { value: a.toFixed(1), of: 'out of ' + actMax(d), chip: mt.word, say: matchSay(mt, recov(d), past) };
 }
 // The 30 days before a date, averaged: "your usual".
 function usual(get, iso) { const xs = []; for (let i = 1; i <= 30; i++) xs.push(get(rec4(addDays(iso, -i)))); return mean(xs); }
@@ -169,9 +175,10 @@ function detailsOf(metric, d, iso) {
       ['Time in bed', num(sl.in_bed_h) ? hm(sl.in_bed_h) : null, num(sl.awake_h) && sl.awake_h > 0 ? dur(sl.awake_h) + ' awake' : '', ''],
     ];
   }
-  const ws = d.workouts || [];
+  const ws = d.workouts || [], rb = recBand(recov(d));
   const one = w => (cap(w.sport) || 'Workout') + (num(w.minutes) ? ', ' + w.minutes + '\u00a0min' : '');
   return [
+    [sel ? 'Target that day' : 'Target for today', rb ? targetText(rb) : null, rb ? 'from your recovery' : '', ''],
     ['Calories', num(d.calories_kcal) ? Math.round(d.calories_kcal).toLocaleString('en-US') + ' kcal' : null, 'burned all day', ''],
     ['Steps', num(d.steps) ? Math.round(d.steps).toLocaleString('en-US') : null, '', ''],
     ['Workouts', !Object.keys(d).length ? null : !ws.length ? 'None' : ws.length === 1 ? one(ws[0]) : ws.length + ': ' + ws.map(w => cap(w.sport) || 'Workout').join(', '), '', ''],
@@ -244,6 +251,7 @@ function renderAll() {
   if (sel && (!newest() || sel > newest())) sel = null;
   renderFocus();
   renderGraph();
+  renderLegend();
 }
 function renderEmpty() {
   const c = ST.connectors.find(x => x.installed) || null;
@@ -336,7 +344,6 @@ function graphPanel(X, changed) {
     b.setAttribute('aria-label', short(iso) + ': ' + (tip || 'no data'));
     b.setAttribute('aria-pressed', String(iso === on));
   }
-  renderLegend(X);
   const scrolls = sizeGraph(X);
   X.graph.setAttribute('aria-label', `${S.name}, every day: ${tracked} ${tracked === 1 ? 'day' : 'days'} tracked${scrolls ? ', older weeks to the left' : ''}.`);
   if (rebuilt || changed || X.cell !== X.lastCell) scrollToDay(X, on, true);
@@ -344,12 +351,15 @@ function graphPanel(X, changed) {
   fitMonths(X);
   showTip(X);
 }
-function renderLegend(X) {
-  const S = SCALE[X.m], box = X.q('hl-legend');
-  box.replaceChildren(h('span', '', S.ends[0]));
-  for (const [cls, title] of S.keys) { const i = h('i', 'hl-cell ' + cls); i.title = title; box.append(i); }
-  box.append(h('span', '', S.ends[1]));
-  box.setAttribute('aria-label', S.name + ': ' + S.keys.map(k => k[1]).join(', '));
+// One legend for all three graphs (it sits under them): what the colours mean, in plain words.
+function renderLegend() {
+  const box = el('legend');
+  if (box.childElementCount) return;
+  for (const [cls, colour, word] of LEGEND) {
+    const k = h('span', 'hl-key'); k.append(h('i', 'hl-cell ' + cls), (colour ? colour + ' ' : '') + word);
+    box.append(k);
+  }
+  box.setAttribute('aria-label', 'Colours: green good, yellow okay, red needs attention, grey no data');
 }
 // A live skin or light/dark change repaints the fills: re-pick each card's text colour once the new sheets apply.
 let inkTimer = null;
@@ -584,7 +594,7 @@ function goBack() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.8.0' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.9.0' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();

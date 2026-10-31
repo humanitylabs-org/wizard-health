@@ -31,7 +31,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent if '__file__' in globals() else Path(os.environ.get('APP_ROOT', '.')).resolve()
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'wizard-health'
-VERSION = '0.8.0'
+VERSION = '0.9.0'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8826')
 CONTRACT = 'wizard.health-data/1'
@@ -465,6 +465,64 @@ def _hm(h):
     return f'{m // 60}h {m % 60:02d}m'
 
 
+# One traffic light for all three metrics, the same rules as the screen (web/words.js): green good, yellow okay,
+# red needs attention; None = no data (grey).
+_LIGHT = {'hi': 'green', 'md': 'yellow', 'lo': 'red'}
+_REC_TARGET = {'hi': (14, 18), 'md': (10, 14), 'lo': (0, 10)}   # WHOOP's own strain guidance per recovery band
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _rec_band(score):
+    return None if not _num(score) else 'hi' if score >= 67 else 'md' if score >= 34 else 'lo'
+
+
+def sleep_band(asleep_h, need_h):
+    """Sleep vs need: green 85%+ ('Enough'), yellow 70-85% ('A bit short'), red under 70% ('Short'); without a need,
+    by hours: 7h+, 6-7h, under 6h."""
+    if not _num(asleep_h):
+        return None
+    pct = None
+    if _num(need_h) and need_h > 0:
+        pct = asleep_h / need_h
+        b = 'hi' if pct >= 0.85 else 'md' if pct >= 0.70 else 'lo'
+    else:
+        b = 'hi' if asleep_h >= 7 else 'md' if asleep_h >= 6 else 'lo'
+    return {'colour': _LIGHT[b], 'word': {'hi': 'Enough', 'md': 'A bit short', 'lo': 'Short'}[b],
+            'pct_of_need': round(pct * 100) if pct is not None else None, 'by': 'need' if pct is not None else 'hours'}
+
+
+def activity_match(strain, score):
+    """How well a day's strain matched that day's recovery. Target: Ready 14-18, So-so 10-14, Run down under 10.
+    Green inside the target (or below it on a Run down day); yellow up to 3 outside ('A bit much' / 'Room to push');
+    red more than 3 above ('Too much for today'). Under-doing is never red. None when either value is missing."""
+    r = _rec_band(score)
+    if not _num(strain) or not r:
+        return None
+    v, (lo, hi) = round(strain * 10) / 10, _REC_TARGET[r]
+    if v > hi + 3:
+        b, side, word = 'lo', 'over', 'Too much for today'
+    elif v > hi:
+        b, side, word = 'md', 'over', 'A bit much'
+    elif v >= lo or r == 'lo':
+        b, side, word = 'hi', 'in', 'Right amount'
+    else:
+        b, side, word = 'md', 'under', 'Room to push'
+    return {'colour': _LIGHT[b], 'word': word, 'side': side, 'strain': v,
+            'target': 'under 10' if r == 'lo' else f'{lo}-{hi}', 'target_low': lo, 'target_high': hi}
+
+
+def _lights(d):
+    """The additive traffic-light fields for one day record."""
+    sl, ld = d.get('sleep') or {}, d.get('load') or {}
+    score = (d.get('readiness') or {}).get('score')
+    rb = _rec_band(score)
+    return {'recovery_colour': _LIGHT.get(rb), 'sleep_band': sleep_band(sl.get('asleep_h'), sl.get('need_h')),
+            'activity_match': activity_match(ld.get('value'), score)}
+
+
 def _scored(d):
     r = d.get('readiness') or {}
     return r.get('score') is not None and r.get('state', 'scored') == 'scored'
@@ -518,14 +576,14 @@ def daily_summary(args=None):
                 spo2_pct=d.get('spo2_pct'), skin_temp_c=d.get('skin_temp_c'), skin_temp_delta_c=d.get('skin_temp_delta_c'),
                 respiratory_rate=d.get('respiratory_rate'), sleep=d.get('sleep'), load=d.get('load'),
                 calories_kcal=d.get('calories_kcal'), avg_hr_bpm=d.get('avg_hr_bpm'), max_hr_bpm=d.get('max_hr_bpm'),
-                steps=d.get('steps'), workouts=d.get('workouts') or [],
+                steps=d.get('steps'), workouts=d.get('workouts') or [], **_lights(d),
                 text=('; '.join(parts) + '.') if parts else 'Not scored yet.')
 
 
 def days_list(args):
     sid = _source_arg(args)
     frm, to = _default_range(args, sid)
-    return {'source': sid, 'from': frm, 'to': to, 'days': _days(sid, frm, to, _limit(args, 100, 400))}
+    return {'source': sid, 'from': frm, 'to': to, 'days': [dict(d, **_lights(d)) for d in _days(sid, frm, to, _limit(args, 100, 400))]}
 
 
 def _avg(xs):
@@ -601,9 +659,9 @@ _RANGE = {'type': 'object', 'properties': dict({'from': {'type': 'string', 'desc
           'additionalProperties': False}
 RO = {'readOnlyHint': True}
 TOOLS = [
-    {'name': 'health_daily_summary', 'description': "The owner's latest day (or a given day) from Health: readiness/recovery score 0-100 with band (high/medium/low), HRV, resting HR, SpO2, skin temp, last night's sleep (hours, stages, score, efficiency, respiratory rate), the day's load on the source's own scale (WHOOP: strain of 21), calories and workouts, plus a one-line text. Labels come from the source. Omit day for the latest; readiness is scored after waking, so early in the day it reports the latest scored day (readiness_date).",
+    {'name': 'health_daily_summary', 'description': "The owner's latest day (or a given day) from Health: readiness/recovery score 0-100 with band (high/medium/low), HRV, resting HR, SpO2, skin temp, last night's sleep (hours, stages, score, efficiency, respiratory rate), the day's load on the source's own scale (WHOOP: strain of 21), calories and workouts, plus a one-line text. Also the screen's one traffic light (green good, yellow okay, red needs attention): recovery_colour; sleep_band (colour, word Enough/A bit short/Short, pct_of_need: green 85%+, yellow 70-85%, red under 70%); activity_match (colour, word Right amount/A bit much/Room to push/Too much for today, target strain range from that day's recovery: Ready 14-18, So-so 10-14, Run down under 10). Labels come from the source. Omit day for the latest; readiness is scored after waking, so early in the day it reports the latest scored day (readiness_date).",
      'inputSchema': {'type': 'object', 'properties': dict({'day': {'type': 'string', 'description': 'YYYY-MM-DD (optional)'}}, **_SRC), 'additionalProperties': False}, 'annotations': RO},
-    {'name': 'health_days', 'description': 'Day-by-day health records (readiness, HRV, resting HR, SpO2, skin temp, sleep, load, calories, workouts, extras) between from and to, newest first. Use for specific dates or weeks.',
+    {'name': 'health_days', 'description': 'Day-by-day health records (readiness, HRV, resting HR, SpO2, skin temp, sleep, load, calories, workouts, extras, plus recovery_colour, sleep_band and activity_match as in health_daily_summary) between from and to, newest first. Use for specific dates or weeks.',
      'inputSchema': _RANGE, 'annotations': RO},
     {'name': 'health_trends', 'description': 'Averages and a day series over the last 7, 30 or 90 days for readiness, HRV, resting HR, sleep hours, sleep score, load and calories, with the change versus the previous period and the count of high/medium/low readiness days.',
      'inputSchema': {'type': 'object', 'properties': dict({'days': {'type': 'integer', 'enum': [7, 30, 90]}}, **_SRC), 'additionalProperties': False}, 'annotations': RO},

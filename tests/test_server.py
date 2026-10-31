@@ -191,6 +191,12 @@ class HealthTest(unittest.TestCase):
         self.assertIn('strain', t['text'])
         self.assertIn('of 21', t['text'])
         self.assertEqual(t['labels']['load'], 'Strain')
+        # 0.9 additive traffic-light fields, the same in the summary and in every day record
+        self.assertIn(t['recovery_colour'], ('green', 'yellow', 'red'))
+        self.assertEqual(t['sleep_band'], {'colour': 'green', 'word': 'Enough', 'pct_of_need': 88, 'by': 'need'})   # 7h of 8h
+        rows = S.days_list({})['days']
+        self.assertTrue(all('activity_match' in r and 'sleep_band' in r for r in rows))
+        self.assertEqual(rows[0]['activity_match'], t['activity_match'])
         tr = S.trends({'days': 30})
         self.assertEqual(len(tr['series']), 30)
         self.assertEqual(tr['days_with_data'], 30)
@@ -305,8 +311,9 @@ class ViewTest(unittest.TestCase):
         html = (self.web / 'index.html').read_text()
         js = (self.web / 'app.js').read_text()
         css = (self.web / 'styles.css').read_text()
+        words = (self.web / 'words.js').read_text()
         # three panels (Recovery, Sleep, Activity), each a title, a coloured summary card and its own graph, cloned from one template
-        for need in ('id="screen"', 'id="panels"', 'id="panel-tpl"', 'class="hl-cells"', 'class="hl-months"', 'class="hl-legend"',
+        for need in ('id="screen"', 'id="panels"', 'id="panel-tpl"', 'class="hl-cells"', 'class="hl-months"', 'id="legend"',
                      'id="metric"', 'id="dock"', 'data-m="recovery"', 'data-m="sleep"', 'data-m="activity"',
                      'class="hl-focus"', 'class="fnum"', 'fchip', 'class="hl-say fsay"', 'fkv', 'fstages', 'id="today"', 'id="when"', 'id="srcdot"',
                      'id="connect"', 'class="hl-tip"', '>Mon<', '>Wed<', '>Fri<', '>Back to today<'):
@@ -325,7 +332,17 @@ class ViewTest(unittest.TestCase):
         self.assertRegex(css, r'\.hl-focus \{[^}]*background: var\(--c, var\(--cell0\)\)')
         self.assertIn('.hl-focus[data-on="canvas"]', css)
         self.assertLess(tpl.index('hl-focus'), tpl.index('hl-graph'))
-        self.assertLess(tpl.index('hl-cells'), tpl.index('hl-legend'))
+        # 0.9: ONE legend for all three graphs, outside the cloned template, after the panels
+        self.assertNotIn('hl-legend', tpl[:tpl.index('</template>')])
+        self.assertNotIn('hl-foot', html + css)
+        self.assertEqual(html.count('class="hl-legend"'), 1)
+        self.assertLess(html.index('id="panels"'), html.index('id="legend"'))
+        self.assertIn("['c-hi', 'Green', 'good'], ['c-md', 'Yellow', 'okay'], ['c-lo', 'Red', 'needs attention'], ['', '', 'No data']", js)
+        # 0.9: one traffic light: every metric wears only c-hi/c-md/c-lo (no green/blue intensity steps)
+        self.assertNotRegex(css + js, r"[.' ]c-(?:g|a|[1-5])\b")
+        for gone in ('--blu', '--hue', 'sleepLevel', 'actLevel', 'ACT_SAY'):
+            self.assertNotIn(gone, css + js + words, gone)
+        self.assertIn("const LIGHT = { hi: 'c-hi', md: 'c-md', lo: 'c-lo' }", js)
         self.assertNotRegex(tpl[:tpl.index('</template>')], r'\sid="')          # cloned three times: no ids inside
         # narrow windows: the picker is a bottom bar after the scrolling content, never inside it
         self.assertLess(html.index('</main>'), html.index('id="dock"'))
@@ -344,14 +361,14 @@ class ViewTest(unittest.TestCase):
         # the bottom bar carries the safe-area/full-screen clearance
         self.assertRegex(css, r'\.hl-dock \{[^}]*var\(--hl-below\)')
         # plain words for the bands (WHOOP recovery 0-33/34-66/67-100; strain <10/10-14/14-18/18+; sleep vs need 85%/70%)
-        words = (self.web / 'words.js').read_text()
         self.assertIn('src="words.js"', html)
         self.assertLess(html.index('src="words.js"'), html.index('src="app.js"'))
         for word in ("'Ready'", "'So-so'", "'Run down'", "'High'", "'Light'", "'Moderate'", "'All out'", "'Enough'", "'A bit short'", "'Short'",
-                     'needed', 'less than you needed', 'Partly recovered', 'Not recovered', 'Well recovered', 'A light day',
+                     'needed', 'less than you needed', 'Partly recovered', 'Not recovered', 'Well recovered', 'Right amount', 'Room to push',
+                     'A bit much', 'Too much for today', 'No recovery data', 'out of ', 'Target for today', 'from your recovery',
                      'Back to today', 'usual', 'Resting heart rate', 'Blood oxygen', 'Skin temperature', 'Calories', 'Steps', 'Workouts',
                      'Heart rate variability', 'higher = more recovered', 'lower is better', 'Time in bed', 'Dreaming (REM)', 'Deep',
-                     "'Less sleep', 'More sleep'", "'Easier', 'Harder'", "'Run down', 'Ready'", 'Read from your heart overnight, not just your sleep.'):
+                     'did you get enough', 'did it match your recovery', 'Read from your heart overnight, not just your sleep.'):
             self.assertIn(word, js + html + words, word)
         self.assertIn('v >= 67', words); self.assertIn('v >= 34', words)
         self.assertIn('v >= 18', words); self.assertIn('v >= 14', words); self.assertIn('v >= 10', words)
@@ -381,6 +398,51 @@ class ViewTest(unittest.TestCase):
         self.assertGreaterEqual(len(bands), 5)
         for v in bands:
             self.assertNotIn('var(--danger)', v)
+
+
+class LightsTest(unittest.TestCase):
+    """The server's traffic-light fields (summary, days, MCP) follow the same rules as the screen."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(ROOT / 'app'))
+        os.environ.setdefault('DATA_DIR', tempfile.mkdtemp())
+        import server
+        cls.S = server
+
+    def test_sleep_band(self):
+        sb = self.S.sleep_band
+        self.assertEqual([sb(h, 10)['colour'] for h in (8.5, 8.49, 7.0, 6.99)], ['green', 'yellow', 'yellow', 'red'])
+        self.assertEqual(sb(5.13, 9.52), {'colour': 'red', 'word': 'Short', 'pct_of_need': 54, 'by': 'need'})
+        self.assertEqual([sb(h, None)['colour'] for h in (7, 6.5, 5.9)], ['green', 'yellow', 'red'])
+        self.assertEqual(sb(6.5, 0)['by'], 'hours')
+        self.assertIsNone(sb(None, 9))
+
+    def test_activity_match(self):
+        am = self.S.activity_match
+        c = lambda v, r: (am(v, r) or {}).get('colour')
+        self.assertEqual([c(v, 80) for v in (2, 13.9, 14, 18, 18.1, 21)], ['yellow', 'yellow', 'green', 'green', 'yellow', 'yellow'])
+        self.assertEqual([c(v, 41) for v in (5.8, 9.9, 10, 14, 17, 17.1)], ['yellow', 'yellow', 'green', 'green', 'yellow', 'red'])
+        self.assertEqual([c(v, 20) for v in (0, 10, 10.1, 13, 13.1)], ['green', 'green', 'yellow', 'yellow', 'red'])
+        self.assertEqual(am(5.8, 41)['word'], 'Room to push')
+        self.assertEqual(am(5.8, 41)['target'], '10-14')
+        self.assertEqual(am(19, 20)['word'], 'Too much for today')
+        self.assertEqual(am(3, 20)['target'], 'under 10')
+        self.assertIsNone(am(10, None)); self.assertIsNone(am(None, 50))
+
+    def test_lights_match_screen(self):
+        # the Python and JS rules agree on a grid of values
+        import shutil as sh
+        import subprocess
+        node = sh.which('node')
+        if not node:
+            self.skipTest('node is not installed')
+        words = ROOT / 'web' / 'words.js'
+        grid = [(v / 2, r) for v in range(0, 43) for r in (0, 20, 33, 34, 50, 66, 67, 90)]
+        js = subprocess.run([node, '-e', f"const W=require({json.dumps(str(words))});process.stdout.write(JSON.stringify("
+                             f"{json.dumps(grid)}.map(([v,r])=>(W.actMatch(v,r)||{{}}).band||null)))"], check=True, capture_output=True, text=True).stdout
+        py = [{'green': 'hi', 'yellow': 'md', 'red': 'lo'}.get((self.S.activity_match(v, r) or {}).get('colour')) for v, r in grid]
+        self.assertEqual(json.loads(js), py)
 
 
 class IconTest(unittest.TestCase):
@@ -422,13 +484,15 @@ class WordsTest(unittest.TestCase):
                          {'name': 'Recovery', 'gloss': 'how ready your body is', 'sub': 'Read from your heart overnight, not just your sleep.'})
         self.assertEqual(self.run_js("W.title('sleep').sub"), '')
         self.assertEqual(self.run_js("W.title('activity').sub"), '')
+        self.assertEqual(self.run_js("W.title('sleep').gloss"), 'did you get enough')
+        self.assertEqual(self.run_js("W.title('activity').gloss"), 'did it match your recovery')
 
     def test_summaries(self):
         self.assertEqual(self.run_js("W.REC_SAY.now.md"), 'Partly recovered. A normal day is fine.')
         self.assertEqual(self.run_js("W.sleepSay(308, 571)"), '4h 23m less than you needed.')
         self.assertEqual(self.run_js("W.sleepSay(40, 70)"), '30m less than you needed.')
         self.assertEqual(self.run_js("W.sleepSay(500, 480)"), 'All the sleep you needed.')
-        for say in self.run_js("[...Object.values(W.REC_SAY.now), ...Object.values(W.REC_SAY.past), ...Object.values(W.ACT_SAY)]"):
+        for say in self.run_js("[...Object.values(W.REC_SAY.now), ...Object.values(W.REC_SAY.past), ...Object.values(W.MATCH_SAY.now), ...Object.values(W.MATCH_SAY.past)]"):
             self.assertLessEqual(len(say), 45, say)
 
     def test_contrast(self):
@@ -441,6 +505,47 @@ class WordsTest(unittest.TestCase):
                          ['Run down', 'Run down', 'So-so', 'So-so', 'Ready', 'Ready'])
         self.assertEqual(self.run_js("[[8.5, 9], [7, 9], [5, 9]].map(([h, n]) => W.SLEEP_WORD[W.sleepBand(h, n)])"),
                          ['Enough', 'A bit short', 'Short'])
+
+    def test_sleep_band_edges(self):
+        # by percent of need: 85% and over green, 70-85% yellow, under 70% red
+        B = lambda h, n: self.run_js(f"W.sleepBand({h}, {n})")
+        self.assertEqual(B(8.5, 10), 'hi'); self.assertEqual(B(8.49, 10), 'md')
+        self.assertEqual(B(7.0, 10), 'md'); self.assertEqual(B(6.99, 10), 'lo')
+        self.assertEqual(B(5.13, 9.52), 'lo')                       # the real 5h 8m of 9h 31m night: 54%
+        self.assertEqual(B(10, 9), 'hi')
+        # no need: by hours (7h+ green, 6-7h yellow, under 6h red)
+        for n in ('null', 0, 'undefined'):
+            self.assertEqual([B(h, n) for h in (7, 6.99, 6, 5.99)], ['hi', 'md', 'md', 'lo'], n)
+        self.assertIsNone(B('null', 9))                               # no sleep: grey
+
+    def test_activity_match_edges(self):
+        M = lambda v, r: self.run_js(f"W.actMatch({v}, {r})")
+        band = lambda v, r: (M(v, r) or {}).get('band')
+        word = lambda v, r: (M(v, r) or {}).get('word')
+        # Ready (target 14-18): under -> yellow Room to push (never red, even a very light day), in -> green, over -> yellow only
+        self.assertEqual([band(v, 80) for v in (0, 5, 10.9, 11, 13.9, 14, 18, 18.1, 21)], ['md', 'md', 'md', 'md', 'md', 'hi', 'hi', 'md', 'md'])
+        self.assertEqual(word(2, 80), 'Room to push'); self.assertEqual(word(19, 80), 'A bit much'); self.assertEqual(word(16, 80), 'Right amount')
+        # So-so (target 10-14): under -> yellow, in -> green, up to 17 -> yellow A bit much, over 17 -> red
+        self.assertEqual([band(v, 41) for v in (5.8, 6.9, 7, 9.9, 10, 14, 14.1, 17, 17.1, 21)], ['md', 'md', 'md', 'md', 'hi', 'hi', 'md', 'md', 'lo', 'lo'])
+        self.assertEqual(word(5.8, 41), 'Room to push'); self.assertEqual(word(15, 41), 'A bit much'); self.assertEqual(word(18, 41), 'Too much for today')
+        # Run down (target under 10): any rest is green, 10-13 yellow, over 13 red (High or All out)
+        self.assertEqual([band(v, 20) for v in (0, 4, 10, 10.1, 13, 13.1, 15, 19)], ['hi', 'hi', 'hi', 'md', 'md', 'lo', 'lo', 'lo'])
+        self.assertEqual(word(1, 20), 'Right amount'); self.assertEqual(word(12, 20), 'A bit much'); self.assertEqual(word(19, 20), 'Too much for today')
+        # recovery band edges pick the target: 33 Run down, 34 So-so, 66 So-so, 67 Ready
+        self.assertEqual([band(12, r) for r in (33, 34, 66, 67)], ['md', 'hi', 'hi', 'md'])
+        # rounded as shown: 17.04 shows as 17.0, so yellow on a So-so day
+        self.assertEqual(band(17.04, 50), 'md'); self.assertEqual(band(17.06, 50), 'lo')
+        # missing recovery or strain: no colour (grey)
+        for args in ((10, 'null'), ('null', 50), (10, 'undefined')):
+            self.assertIsNone(M(*args), args)
+        # the plain sentences
+        S = lambda v, r, past: self.run_js(f"W.matchSay(W.actMatch({v}, {r}), {r}, {str(past).lower()})")
+        self.assertEqual(S(12, 50, True), 'Right amount for how recovered you were.')
+        self.assertEqual(S(18, 20, True), 'More than your body was ready for.')
+        self.assertEqual(S(5, 80, True), 'You had room to push harder.')
+        self.assertEqual(S(16, 50, False), 'A little more than your body is ready for.')
+        self.assertEqual(S(3, 20, False), 'Taking it easy is right today.')
+        self.assertEqual(self.run_js("[W.targetText('hi'), W.targetText('md'), W.targetText('lo')]"), ['14\u201318', '10\u201314', 'under 10'])
 
     def test_recovery_vs_sleep(self):
         R = lambda score, h, need, past=False: self.run_js(f"W.recoveryVsSleep({score}, {h}, {need}, {str(past).lower()})")
