@@ -46,6 +46,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-empty { flex: 1; display: grid; place-content: center; justify-items: center; gap: 18px; }
 .hl-connect { display: grid; justify-items: center; gap: 14px; padding: 30px 40px; border-radius: 30px; background: var(--accent); color: var(--on-accent); text-decoration: none; font-size: 17px; font-weight: 700; }
 .hl-connect svg { width: 56px; height: 56px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linejoin: round; stroke-linecap: round; }
+.hl-setups { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 360px; }
+.hl-setups .hl-note { margin: 0; text-align: center; }
 .hl-wait { width: 8px; height: 8px; border-radius: 50%; background: var(--hi); animation: hl-pulse 1.4s ease-in-out infinite; }
 @keyframes hl-pulse { 50% { opacity: .25; } }
 
@@ -93,7 +95,11 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-kv dt small { grid-area: 2 / 1; font-size: 12px; line-height: 1.3; }
 .hl-kv dd b { grid-area: 1 / 2; justify-self: end; font-size: 14px; font-weight: 750; font-variant-numeric: tabular-nums; text-align: right; }
 .hl-kv dd small { grid-area: 2 / 2; justify-self: end; font-size: 12px; white-space: nowrap; }
+/* a value another source filled: its tiny origin note on its own line under the value (or under "usual") */
+.hl-kv dd small + small.hl-ofrom { grid-area: 3 / 2; }
 .hl-kv dt span i { flex: none; width: 9px; height: 9px; border-radius: 2px; }
+/* a headline metric another source filled in: one tiny note under the details ("Sleep from Oura") */
+.hl-from { margin-top: -2px; font-size: 12px; font-weight: 600; opacity: .85; }
 /* the fold toggle: narrow windows only; wide windows always show the details */
 .hl-expand { display: none; }
 /* sleep stages: one thin bar in the card's own text colour, deepest sleep fullest */
@@ -131,7 +137,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .hl-panel:not(.is-on) { display: none; }
   /* the card's details fold away so title, card, squares and legend fit one phone screen; one tap on the card unfolds them */
   .hl-focus { cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .hl-focus:not(.is-open) .fkv, .hl-focus:not(.is-open) .fstages { display: none; }
+  .hl-focus:not(.is-open) .fkv, .hl-focus:not(.is-open) .fstages, .hl-focus:not(.is-open) .ffrom { display: none; }
   .hl-expand { display: inline-flex; align-items: center; gap: 7px; justify-self: start; min-height: 36px; margin: -4px 0 -6px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
   .hl-expand::after { content: ""; width: 6px; height: 6px; margin-top: -3px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); }
   .hl-expand[aria-expanded="true"] { font-size: 0; min-height: 28px; justify-self: center; }
@@ -195,6 +201,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-src-main small { font-size: 12.5px; color: var(--ink-3); }
 .hl-src-main small.hl-warn { color: var(--md); font-weight: 600; }
 .hl-src-act { display: flex; gap: 6px; flex: none; }
+.hl-src-main b { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.hl-main { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: var(--r-pill); border: 1px solid var(--line-2, var(--line)); font-size: 11.5px; font-weight: 700; color: var(--ink-2); }
+.hl-note { margin: 10px 2px 0; font-size: 12.5px; line-height: 1.35; color: var(--ink-3); }
 .hl-refresh { width: 100%; margin-top: 12px; }
 
 @media (prefers-reduced-motion: reduce) {

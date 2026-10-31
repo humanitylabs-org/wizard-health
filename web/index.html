@@ -20,12 +20,13 @@
 <body>
   <div class="wz-app hl-app">
     <main class="wz-scroll hl-scroll" id="main">
-      <!-- Nothing connected yet: one big button to the connector app; Health never takes keys itself -->
+      <!-- Nothing connected yet: one big button to the connector app (or each connector's setup link); Health never takes keys itself -->
       <section id="empty" class="hl-empty" hidden>
         <a class="hl-connect" id="connect" href="#">
           <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 41s-15-8.6-15-20a8.5 8.5 0 0 1 15-5.5A8.5 8.5 0 0 1 39 21c0 11.4-15 20-15 20z"/><path d="M10 24h8l3-6 5 12 3-6h9"/></svg>
           <span>Connect a source</span>
         </a>
+        <div class="hl-setups" id="setups" hidden></div>
         <i class="hl-wait" id="wait" hidden></i>
       </section>
 
@@ -66,6 +67,7 @@
       <p class="hl-say fsay"></p>
       <div class="hl-stbar fstages" role="img" hidden></div>
       <dl class="hl-kv fkv"></dl>
+      <small class="hl-from ffrom" hidden></small>
       <button type="button" class="hl-expand fexp" aria-expanded="false">Details</button>
     </section>
     <section class="hl-graph" aria-label="Every day">

@@ -75,9 +75,26 @@ const live = src => src && ['connected', 'syncing', 'rate_limited'].includes(src
 const primary = () => ST && ST.sources.find(x => x.primary);
 const hasData = () => !!(ST && ST.sources.some(x => x.days > 0));
 const STATUS = { connected: ['Connected', 'ok'], syncing: ['Syncing', 'ok'], rate_limited: ['Paused', 'warn'], needs_login: ['Sign in again', 'warn'],
-  not_configured: ['Not connected', 'off'], not_installed: ['Not installed', 'off'], needs_update: ['Needs an update', 'warn'] };
+  not_configured: ['Not set up', 'off'], not_installed: ['Not installed', 'off'], needs_update: ['Needs an update', 'warn'] };
 // Fresh = the source is signed in and synced within the last 3 hours.
 const fresh = src => live(src) && src.last_sync && Date.now() - new Date(src.last_sync) < 3 * 3600000;
+// The Sources sheet's one word per source (the server's `state`; older servers only sent `status`).
+const stateOf = x => x.state || (!x.installed ? 'not_installed' : x.status === 'needs_update' ? 'needs_update'
+  : live(x) ? (fresh(x) ? 'connected' : 'stale') : x.status === 'not_configured' ? 'not_set_up' : x.status === 'needs_login' ? 'sign_in' : 'error');
+const srcOf = id => (ST && ST.sources.find(x => x.id === id)) || null;
+const srcName = id => (srcOf(id) || {}).name || (SUM && SUM.source_names && SUM.source_names[id]) || id;
+// A metric another source filled because the main source had none that day: its tiny origin note.
+function fromNote(d, key) {
+  const o = d && d.origins && d.origins[key];
+  return o && d.source && o !== d.source ? 'from ' + srcName(o) : '';
+}
+// No readiness score because no source of this day gives one: name it ("No score from Oura"); never invent a score.
+function noScoreFrom(d) {
+  if (num(recov(d)) || !d) return null;
+  const used = [...new Set([d.source, ...Object.values(d.origins || {})].filter(Boolean))];
+  if (!used.length || used.some(id => { const x = srcOf(id); return !x || x.has_readiness !== false; })) return null;
+  return srcName(used[0]);
+}
 
 // ---------- the numbers, in plain words (one record shape: the summary or a stored day) ----------
 const labels = () => (SUM && SUM.labels) || {};
@@ -89,7 +106,14 @@ const recov = d => ((d || {}).readiness || {}).score;
 const sleepH = d => ((d || {}).sleep || {}).asleep_h;
 const needH = d => ((d || {}).sleep || {}).need_h;
 const act = d => ((d || {}).load || {}).value;
-const actMax = d => ((d || {}).load || {}).max || labels().load_max || 21;
+const loadOf = d => (d || {}).load || null;
+// The source's own scale for the card: "out of 21" (WHOOP, a scale with a top), or what it counts ("active zone
+// minutes") when the scale is open-ended (max null; its scale_max then only sets targets).
+const actTop = d => { const L = loadOf(d) || {}; return num(L.max) ? L.max : L.max === null ? null : labels().load_max; };
+const actOf = d => { const L = loadOf(d) || {}, mx = actTop(d); return num(mx) ? 'out of ' + mx : String(L.label || L.unit || '').toLowerCase(); };
+// One decimal on small scales (WHOOP 0-21: 5.9); whole numbers stay whole on bigger ones.
+const actFmt = (v, d) => { const L = loadOf(d) || {}, mx = num(actTop(d)) ? actTop(d) : L.scale_max;
+  return num(mx) && mx > 30 ? (Number.isInteger(v) ? String(v) : v.toFixed(1)) : v.toFixed(1); };
 const hrv = d => (d || {}).hrv_ms;
 // Bands and words live in words.js: one traffic light for all three (green good, yellow okay, red needs attention).
 // Recovery 67+/34-66/0-33; Sleep 85%+/70-85%/under 70% of need; Activity by how its effort matched that day's recovery.
@@ -97,7 +121,7 @@ const sleepPct = d => num(sleepH(d)) && num(needH(d)) && needH(d) > 0 ? Math.rou
 const band = {
   recovery: d => recBand(recov(d)),
   sleep: d => sleepBand(sleepH(d), needH(d)),
-  activity: d => (actMatch(act(d), recov(d)) || {}).band || null,
+  activity: d => (actMatch(act(d), recov(d), loadOf(d)) || {}).band || null,
 };
 // The one class every square and card wears: c-hi green, c-md yellow, c-lo red; no class = grey (no data).
 const LIGHT = { hi: 'c-hi', md: 'c-md', lo: 'c-lo' };
@@ -119,8 +143,8 @@ const SCALE = {
   activity: {
     name: 'Activity',
     cls: d => lightOf('activity', d),
-    tip: d => { if (!num(act(d))) return null; const mt = actMatch(act(d), recov(d));
-      return 'Activity ' + act(d).toFixed(1) + ', ' + (mt ? mt.word.toLowerCase() : 'no recovery data'); },
+    tip: d => { if (!num(act(d))) return null; const mt = actMatch(act(d), recov(d), loadOf(d));
+      return 'Activity ' + actFmt(act(d), d) + ', ' + (mt ? mt.word.toLowerCase() : num(recov(d)) ? 'no target' : 'no recovery data'); },
   },
 };
 const LEGEND = [['c-hi', 'Green', 'good'], ['c-md', 'Yellow', 'okay'], ['c-lo', 'Red', 'needs attention'], ['', '', 'No data']];
@@ -131,7 +155,8 @@ const dur = hours => { const m = Math.round(hours * 60); return m >= 60 ? Math.f
 // Everything the card shows for one metric on one day, generated from the values.
 function focusOf(metric, d, past) {
   if (metric === 'recovery') {
-    const r = recov(d), b = recBand(r);
+    const r = recov(d), b = recBand(r), none = noScoreFrom(d);
+    if (!b && none) return { value: DASH, chip: 'No score from ' + none, say: none + ' does not give a recovery score.' };
     if (!b) return { value: DASH, say: 'Not scored yet. Your wearable scores it after you wake up.' };
     return { value: Math.round(r) + '%', chip: REC_WORD[b], say: REC_SAY[past ? 'past' : 'now'][b], also: recoveryVsSleep(r, sleepH(d), needH(d), past) };
   }
@@ -143,9 +168,10 @@ function focusOf(metric, d, past) {
   }
   const a = act(d);
   if (!num(a)) return { value: DASH, say: 'No activity recorded for this day.' };
-  const mt = actMatch(a, recov(d));
-  if (!mt) return { value: a.toFixed(1), of: 'out of ' + actMax(d), chip: 'No recovery data', say: 'No recovery score, so no target for this day.' };
-  return { value: a.toFixed(1), of: 'out of ' + actMax(d), chip: mt.word, say: matchSay(mt, recov(d), past) };
+  const mt = actMatch(a, recov(d), loadOf(d));
+  if (!mt && !num(recov(d))) return { value: actFmt(a, d), of: actOf(d), chip: 'No recovery data', say: 'No recovery score, so no target for this day.' };
+  if (!mt) return { value: actFmt(a, d), of: actOf(d), chip: 'No target', say: 'No scale from this source to set a target.' };
+  return { value: actFmt(a, d), of: actOf(d), chip: mt.word, say: matchSay(mt, recov(d), past) };
 }
 // The 30 days before a date, averaged: "your usual".
 function usual(get, iso) { const xs = []; for (let i = 1; i <= 30; i++) xs.push(get(rec4(addDays(iso, -i)))); return mean(xs); }
@@ -160,10 +186,10 @@ function detailsOf(metric, d, iso) {
     const [hv, hu] = r(hrv, v => String(Math.round(v)), 3), [rh, ru] = r(x => (x || {}).resting_hr_bpm, v => String(Math.round(v)), 1);
     const [tv, tu] = r(x => (x || {}).skin_temp_c, v => v.toFixed(1) + '\u00b0', 0.2);
     return [
-      ['Heart rate variability', num(hv) ? Math.round(hv) + ' ms' : null, 'higher = more recovered', hu],
-      ['Resting heart rate', num(rh) ? Math.round(rh) + ' bpm' : null, 'lower is better', ru],
-      ['Blood oxygen', num(d.spo2_pct) ? d.spo2_pct.toFixed(1) + '%' : null, 'overnight', ''],
-      ['Skin temperature', num(tv) ? tv.toFixed(1) + ' \u00b0C' : null, 'a rise can mean illness', tu],
+      ['Heart rate variability', num(hv) ? Math.round(hv) + ' ms' : null, 'higher = more recovered', hu, '', fromNote(d, 'hrv_ms')],
+      ['Resting heart rate', num(rh) ? Math.round(rh) + ' bpm' : null, 'lower is better', ru, '', fromNote(d, 'resting_hr_bpm')],
+      ['Blood oxygen', num(d.spo2_pct) ? d.spo2_pct.toFixed(1) + '%' : null, 'overnight', '', '', fromNote(d, 'spo2_pct')],
+      ['Skin temperature', num(tv) ? tv.toFixed(1) + ' \u00b0C' : null, 'a rise can mean illness', tu, '', fromNote(d, 'skin_temp_c')],
     ];
   }
   if (metric === 'sleep') {
@@ -178,21 +204,26 @@ function detailsOf(metric, d, iso) {
   const ws = d.workouts || [], rb = recBand(recov(d));
   const one = w => (cap(w.sport) || 'Workout') + (num(w.minutes) ? ', ' + w.minutes + '\u00a0min' : '');
   return [
-    [sel ? 'Target that day' : 'Target for today', rb ? targetText(rb) : null, rb ? 'from your recovery' : '', ''],
-    ['Calories', num(d.calories_kcal) ? Math.round(d.calories_kcal).toLocaleString('en-US') + ' kcal' : null, 'burned all day', ''],
-    ['Steps', num(d.steps) ? Math.round(d.steps).toLocaleString('en-US') : null, '', ''],
-    ['Workouts', !Object.keys(d).length ? null : !ws.length ? 'None' : ws.length === 1 ? one(ws[0]) : ws.length + ': ' + ws.map(w => cap(w.sport) || 'Workout').join(', '), '', ''],
+    [sel ? 'Target that day' : 'Target for today', rb ? targetText(rb, loadOf(d)) || null : null, rb ? 'from your recovery' : '', ''],
+    ['Calories', num(d.calories_kcal) ? Math.round(d.calories_kcal).toLocaleString('en-US') + ' kcal' : null, 'burned all day', '', '', fromNote(d, 'calories_kcal')],
+    ['Steps', num(d.steps) ? Math.round(d.steps).toLocaleString('en-US') : null, '', '', '', fromNote(d, 'steps')],
+    ['Workouts', !Object.keys(d).length || !Array.isArray(d.workouts) && d.source ? null : !ws.length ? 'None' : ws.length === 1 ? one(ws[0]) : ws.length + ': ' + ws.map(w => cap(w.sport) || 'Workout').join(', '), '', '', '', fromNote(d, 'workouts')],
   ];
 }
+// The card's headline metric came from another source: one tiny note at the end of the details.
+const HEAD = { recovery: ['readiness', 'Score'], sleep: ['sleep', 'Sleep'], activity: ['load', 'Activity'] };
+function headFrom(m, d) { const [key, what] = HEAD[m], f = fromNote(d, key); return f ? what + ' ' + f : ''; }
 function fillRows(dl, list) {
   dl.replaceChildren();
-  for (const [k, v, gloss, sub, st] of list) {
+  // [name, value, gloss, vs usual, stage swatch, origin note ("from Oura": another source filled this value)]
+  for (const [k, v, gloss, sub, st, from] of list) {
     if (v == null || v === '') continue;
     const r = h('div'), dt = h('dt'), dd = h('dd'), name = h('span');
     if (st) name.append(h('i', 'st-' + st));
     name.append(k); dt.append(name);
     if (gloss) dt.append(h('small', '', gloss));
     dd.append(h('b', '', v)); if (sub) dd.append(h('small', '', sub));
+    if (from) dd.append(h('small', 'hl-ofrom', from));
     r.append(dt, dd); dl.append(r);
   }
   dl.hidden = !dl.children.length;
@@ -253,11 +284,19 @@ function renderAll() {
   renderGraph();
   renderLegend();
 }
+// Nothing to show yet: one big button. With one connector app installed it opens it; with several, each is listed
+// below as its own setup link; with none, the big button opens Sources (which names the App Store connectors).
 function renderEmpty() {
-  const c = ST.connectors.find(x => x.installed) || null;
+  const apps = [...ST.sources.filter(x => x.installed && !live(x)).map(x => ({ id: x.id, name: x.name, app_path: x.app_path })),
+    ...ST.connectors.filter(c => c.installed && !ST.sources.some(x => x.id === c.id))];
+  const one = apps.length === 1 ? apps[0] : null;
   const a = el('connect');
-  a.href = c ? c.app_path : '#';
-  a.onclick = e => { if (c) openApp(e, c.id, c.app_path); else { e.preventDefault(); openSources(); } };
+  a.href = one ? one.app_path : '#';
+  a.onclick = e => { if (one) openApp(e, one.id, one.app_path); else { e.preventDefault(); openSources(); } };
+  const box = el('setups');
+  box.replaceChildren(...(apps.length > 1 ? apps.map(c => appLink('Set up ' + c.name, c.id, c.app_path, 'wz-button secondary')) : []));
+  if (!apps.length && !ST.sources.some(live)) box.append(h('p', 'hl-note', 'Get ' + join(ST.connectors.map(c => c.name)).replace(' and ', ' or ') + ' from the App Store.'));
+  box.hidden = !box.childElementCount;
   el('wait').hidden = !ST.sources.some(live);
 }
 function renderFocus() {
@@ -283,6 +322,8 @@ function focusPanel(X, iso) {
   q('fsay').textContent = F.say + (F.also ? ' ' + F.also : '');
   fillStages(q('fstages'), m === 'sleep' ? d.sleep || {} : {});
   fillRows(q('fkv'), rec4(iso) ? detailsOf(m, d, iso) : []);
+  const from = rec4(iso) ? headFrom(m, d) : '';
+  q('ffrom').textContent = from; q('ffrom').hidden = !from;
   card.classList.toggle('is-open', OPEN);
   q('fexp').setAttribute('aria-expanded', String(OPEN));
   q('fexp').hidden = !rec4(iso);
@@ -466,40 +507,50 @@ function openSheet(title, nodes, kind = '') {
   body.replaceChildren(h2, ...nodes);
   if (window.WzSheet) WzSheet.open(d); else d.showModal();
 }
+// Every connector Health found, with one word for its state; one not set up yet is a 'Set up' link to its own app
+// (Health never takes keys). With two or more connected, the owner picks the main source (saved server-side).
+const STATE = { connected: ['Connected', 'ok'], stale: ['Behind', 'stale'], not_set_up: ['Not set up', 'off'], sign_in: ['Sign in again', 'stale'],
+  needs_update: ['Needs an update', 'stale'], error: ['Not working', 'stale'], not_installed: ['Not installed', 'off'] };
+const join = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
 function openSources() {
   const nodes = [];
   const list = h('ul', 'hl-srcs');
-  const several = ST.sources.filter(x => x.days > 0).length > 1;
+  const choose = ST.sources.filter(x => x.connected).length >= 2;
   for (const x of ST.sources) {
+    const st = stateOf(x), [word, dot] = STATE[st] || ['Unknown', 'off'];
     const li = h('li', 'hl-src');
-    const [label] = STATUS[x.status] || ['Unknown'];
-    const ok = fresh(x);
-    li.append(h('i', 'hl-sdot ' + (ok ? 'ok' : 'stale')));
-    const m = h('span', 'hl-src-main');
-    m.append(h('b', '', x.name + (x.account ? ' \u00b7 ' + x.account : '')),
-      h('small', '', live(x) ? 'Synced ' + ago(x.last_sync) : label));
-    if (x.status === 'needs_login') m.append(h('small', 'hl-warn', 'Sign in again in ' + x.name));
-    else if (x.status === 'needs_update') m.append(h('small', 'hl-warn', 'Update ' + x.name + ' or Health'));
-    else if (x.error || x.pull_error) m.append(h('small', 'hl-warn', x.error || x.pull_error));
+    li.dataset.state = st;
+    li.append(h('i', 'hl-sdot ' + dot));
+    const m = h('span', 'hl-src-main'), name = h('b', '', x.name + (x.account ? ' \u00b7 ' + x.account : ''));
+    if (choose && x.primary) name.append(h('span', 'hl-main', 'Main'));
+    m.append(name);
+    const line = st === 'connected' ? 'Synced ' + ago(x.last_sync) : st === 'stale' ? 'Behind \u00b7 synced ' + ago(x.last_sync)
+      : st === 'not_installed' && x.days ? 'Not installed \u00b7 ' + x.days + ' days kept' : word;
+    m.append(h('small', st === 'stale' || st === 'sign_in' || st === 'needs_update' || st === 'error' ? 'hl-warn' : '', line));
+    if (st === 'needs_update') m.append(h('small', 'hl-warn', 'Update ' + x.name + ' or Health'));
+    else if ((x.error || x.pull_error) && st !== 'not_set_up') m.append(h('small', 'hl-warn', x.error || x.pull_error));
     li.append(m);
     const a = h('span', 'hl-src-act');
-    if (several && !x.primary) { const b = h('button', 'wz-button secondary hl-sm', 'Show'); b.type = 'button'; b.onclick = () => setPrimary(x.id); a.append(b); }
-    if (x.installed) a.append(appLink('Open', x.id, x.app_path, 'wz-button secondary hl-sm'));
-    else { const b = h('button', 'wz-button secondary hl-sm', 'Remove'); b.type = 'button'; b.onclick = () => forget(x.id); a.append(b); }
+    if (choose && x.connected && !x.primary) { const b = h('button', 'wz-button secondary hl-sm', 'Make main'); b.type = 'button'; b.onclick = () => setPrimary(x.id); a.append(b); }
+    if (st === 'not_set_up') a.append(appLink('Set up', x.id, x.app_path, 'wz-button hl-sm'));
+    else if (st === 'sign_in') a.append(appLink('Sign in', x.id, x.app_path, 'wz-button hl-sm'));
+    else if (x.installed && !(choose && x.connected && !x.primary)) a.append(appLink('Open', x.id, x.app_path, 'wz-button secondary hl-sm'));
+    else if (!x.installed) { const b = h('button', 'wz-button secondary hl-sm', 'Remove'); b.type = 'button'; b.onclick = () => forget(x.id); a.append(b); }
     li.append(a);
     list.append(li);
   }
-  const more = ST.connectors.filter(c => !ST.sources.some(x => x.id === c.id && x.installed));
-  for (const c of more) {
-    const li = h('li', 'hl-src');
+  // Known connectors that are installed but not reachable as a source yet, and the ones not installed at all.
+  for (const c of ST.connectors.filter(c => c.installed && !ST.sources.some(x => x.id === c.id))) {
+    const li = h('li', 'hl-src'); li.dataset.state = 'not_set_up';
     li.append(h('i', 'hl-sdot off'));
-    const m = h('span', 'hl-src-main'); m.append(h('b', '', c.name), h('small', '', c.installed ? 'Not connected' : 'In the App Store')); li.append(m);
-    const a = h('span', 'hl-src-act');
-    if (c.installed) a.append(appLink('Connect', c.id, c.app_path, 'wz-button hl-sm'));
-    li.append(a);
+    const m = h('span', 'hl-src-main'); m.append(h('b', '', c.name), h('small', '', 'Not set up')); li.append(m);
+    const a = h('span', 'hl-src-act'); a.append(appLink('Set up', c.id, c.app_path, 'wz-button hl-sm')); li.append(a);
     list.append(li);
   }
   nodes.push(list);
+  if (choose) nodes.push(h('p', 'hl-note', 'The main source fills the cards; the others fill its gaps.'));
+  const more = ST.connectors.filter(c => !c.installed && !ST.sources.some(x => x.id === c.id)).map(c => c.name);
+  if (more.length) nodes.push(h('p', 'hl-note', 'Also works with ' + join(more) + ', from the App Store.'));
   const rb = h('button', 'wz-button secondary hl-refresh', 'Refresh'); rb.type = 'button'; rb.id = 'refresh';
   rb.onclick = async () => {
     rb.disabled = true; rb.textContent = 'Refreshing\u2026';
@@ -554,7 +605,7 @@ new ResizeObserver(() => {
 }).observe(app);
 
 // ---------- loading (cached copy first, then fresh) ----------
-const CACHE = 'wizard-health.screen.v5', PREF = 'wizard-health.metric';
+const CACHE = 'wizard-health.screen.v6', PREF = 'wizard-health.metric';
 function saveCache() { try { localStorage.setItem(CACHE, JSON.stringify({ ST, SUM, DAYS })); } catch (e) {} }
 function loadCache() {
   try { const m = localStorage.getItem(PREF); if (SCALE[m]) METRIC = m; } catch (e) {}
@@ -594,7 +645,7 @@ function goBack() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.9.0' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.10.0' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();

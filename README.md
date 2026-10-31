@@ -6,8 +6,10 @@ Recovery, Sleep and Activity each get a title that says what it is and one summa
 
 Health never talks to a provider and never takes keys. It reads connector apps that fill the `health-data` spot through the contract [`wizard.health-data/1`](docs/health-data-contract.md), the same split as Money over SimpleFIN/Monarch/Teller:
 
-- [WHOOP](https://github.com/oscarhenrycollins/wizard-whoop) (`wizard-whoop`) today. A future Oura or Garmin connector only has to provide `health-data` and answer the contract; Health finds it through the App Manager's grants file, `HEALTH_SOURCES`, or its built-in list, and the connector names itself.
-- When nothing is connected, the screen lists the connector apps and opens them ("Connect WHOOP" opens `/wizard-whoop/`).
+- [WHOOP](https://github.com/oscarhenrycollins/wizard-whoop) (`wizard-whoop`, 8824), and Oura, Fitbit, Polar and Withings connectors (`wizard-oura` 8828, `wizard-fitbit` 8830, `wizard-polar` 8832, `wizard-withings` 8834). Any connector only has to provide `health-data` and answer the contract; Health finds every one through the App Manager's grants file (`provider_endpoints_all`), `HEALTH_SOURCES`, or its built-in list, and the connector names itself.
+- Several sources: the Sources sheet shows each one's state (connected, behind, not set up with a Set up link to its own app). With two or more connected the owner picks the main source (saved server-side; default WHOOP, Oura, Fitbit, Polar, Withings order). Each day uses the main source's record; a metric it lacks that day is filled from another source and marked (`origins`, `filled`, a small "from Oura" note on the card).
+- Activity targets come from the recovery band as fractions of the source's `load.scale_max` (WHOOP 0-21 keeps 14-18 / 10-14 / under 10), or the source's own `load.targets`. A source with no readiness score shows "No score from <source>" (grey), never a made-up score.
+- When nothing is connected, the screen lists the connector apps and opens them ("Set up Oura" opens `/wizard-oura/`).
 - Health keeps its own copy of the days it read (pulled with each source's `changed_since` cursor; dropped and re-read when a source's `dataset` id changes), so screens and agent tools never wait on a connector.
 
 ## Interfaces

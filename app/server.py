@@ -5,10 +5,14 @@ that fill the `health-data` spot through the shared contract `wizard.health-data
 keeps its own copy of their normalized day records, and builds Today, 7/30/90-day trends and workouts from it.
 
 Discovery mirrors Money over bank connections: candidates come from the App Manager's grants file
-(`/wizard/grants.json` provider_endpoints, written because wizard.md says `uses: [health-data]`), the
-HEALTH_SOURCES env (`id=http://host:port,...`) and a built-in list of known connectors. Every candidate is probed at
+(`/wizard/grants.json`: provider_endpoints_all lists every provider of the spot, provider_endpoints one; written
+because wizard.md says `uses: [health-data]`), the HEALTH_SOURCES env (`id=http://host:port,...`) and a built-in list
+of known connectors (WHOOP, Oura, Fitbit, Polar, Withings with their ports). Every candidate is probed at
 GET /api/status in parallel; a reply with the contract names itself, so a new connector needs no code change here.
 Probes are cached and kept warm by a background loop; reads never wait on a connector.
+
+Several sources: one is the main source (the owner's pick, else the first connected in KNOWN order). Each day is the
+main source's record; a metric it lacks that day is filled from another source and marked in `origins`/`filled`.
 
 Each source is pulled with its `changed_since` cursor (only days that changed). When a source's `dataset` id changes
 (Disconnect wiped it), Health drops that source's copy and reads it again.
@@ -17,6 +21,7 @@ Stdlib only. DATA_DIR holds health.sqlite3 (0600, folder 0700).
 """
 import datetime as dt
 import json
+import math
 import os
 import re
 import sqlite3
@@ -31,15 +36,28 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent if '__file__' in globals() else Path(os.environ.get('APP_ROOT', '.')).resolve()
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'wizard-health'
-VERSION = '0.9.0'
+VERSION = '0.10.0'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8826')
 CONTRACT = 'wizard.health-data/1'
 GRANTS_FILE = os.environ.get('WIZARD_GRANTS_FILE', '/wizard/grants.json')
-# Connectors Health knows by name, as Money knows SimpleFIN/Monarch/Teller. Anything else that fills the spot is
-# found through the grants file or HEALTH_SOURCES and names itself.
-KNOWN = [{'id': 'wizard-whoop', 'name': 'WHOOP', 'base': 'http://wizard-whoop:8824', 'app_path': '/wizard-whoop/',
-          'blurb': 'Recovery, sleep, strain and workouts from your WHOOP.'}]
+# Connectors Health knows by name, as Money knows SimpleFIN/Monarch/Teller: a fallback for App Managers whose grants
+# file lists one endpoint per spot. Anything else that fills the spot is found through the grants file
+# (provider_endpoints_all lists every provider) or HEALTH_SOURCES, and names itself. The order is also the default
+# choice of main source when several are connected.
+KNOWN = [
+    {'id': 'wizard-whoop', 'name': 'WHOOP', 'base': 'http://wizard-whoop:8824', 'app_path': '/wizard-whoop/',
+     'blurb': 'Recovery, sleep, strain and workouts from your WHOOP.'},
+    {'id': 'wizard-oura', 'name': 'Oura', 'base': 'http://wizard-oura:8828', 'app_path': '/wizard-oura/',
+     'blurb': 'Readiness, sleep and activity from your Oura ring.'},
+    {'id': 'wizard-fitbit', 'name': 'Fitbit', 'base': 'http://wizard-fitbit:8830', 'app_path': '/wizard-fitbit/',
+     'blurb': 'Sleep, heart and activity from your Fitbit or Pixel Watch.'},
+    {'id': 'wizard-polar', 'name': 'Polar', 'base': 'http://wizard-polar:8832', 'app_path': '/wizard-polar/',
+     'blurb': 'Recharge, sleep and training from your Polar.'},
+    {'id': 'wizard-withings', 'name': 'Withings', 'base': 'http://wizard-withings:8834', 'app_path': '/wizard-withings/',
+     'blurb': 'Sleep, heart and activity from your Withings devices.'},
+]
+STALE_HOURS = 3   # a connected source that has not synced for this long is shown as behind
 ENV_SOURCES = [s.split('=', 1) for s in os.environ.get('HEALTH_SOURCES', '').split(',') if '=' in s]
 PROBE_TTL = float(os.environ.get('HEALTH_PROBE_TTL', '90'))
 PULL_MINUTES = float(os.environ.get('HEALTH_PULL_MINUTES', '10'))
@@ -137,6 +155,12 @@ def _get(base, path, params=None, timeout=10):
         raise Problem(502, 'Could not reach that health connection app.') from None
 
 
+def _rank(sid):
+    """Known connectors first, in KNOWN order; anything else after them, by id."""
+    i = next((n for n, k in enumerate(KNOWN) if k['id'] == sid), len(KNOWN))
+    return (i, str(sid or ''))
+
+
 def candidates():
     """(id or None, base) pairs to probe: grants file, env, then the known list; first one per address wins."""
     out, seen = [], set()
@@ -149,6 +173,11 @@ def candidates():
         out.append((sid if sid and ID_RE.match(sid) else None, base))
     try:
         g = json.loads(Path(GRANTS_FILE).read_text())
+        # Newer App Managers list every provider of a spot (provider_endpoints_all: target -> app id -> URL);
+        # provider_endpoints keeps one endpoint per target.
+        for key, many in sorted((g.get('provider_endpoints_all') or {}).items()):
+            for sid, base in sorted((many if isinstance(many, dict) else {}).items(), key=lambda x: _rank(x[0])):
+                add(sid, base)
         for key, base in sorted((g.get('provider_endpoints') or {}).items()):
             add(None if str(key).startswith('slot:') else key, base)
     except (OSError, ValueError, AttributeError):
@@ -179,12 +208,26 @@ def _probe(sid, base):
         return None
     known = next((k for k in KNOWN if k['id'] == real), {})
     acct = st.get('account') if isinstance(st.get('account'), dict) else {}
+    scales = st.get('scales') if isinstance(st.get('scales'), dict) else {}
     return {'id': real, 'base': base, 'name': str(src.get('name') or known.get('name') or real)[:60],
             'provider': str(src.get('provider') or '')[:40], 'app_path': _app_path(src.get('app_path'), real),
             'contract_ok': st.get('contract') == CONTRACT, 'status': str(st.get('status') or 'unknown'),
             'account': acct.get('name'), 'dataset': st.get('dataset'), 'last_sync': st.get('last_sync'),
             'next_sync': st.get('next_sync'), 'history_from': st.get('history_from'), 'latest_date': st.get('latest_date'),
-            'counts': st.get('counts') or {}, 'error': st.get('error'), 'scales': st.get('scales') or {}}
+            'counts': st.get('counts') or {}, 'error': st.get('error'), 'scales': scales,
+            'has_readiness': _has_readiness(scales, st.get('provides'))}
+
+
+def _has_readiness(scales, provides=None):
+    """Whether a source gives a readiness/recovery score at all. None when its scales leave readiness out (or null),
+    mark it `available: false`, or its `provides.readiness` is false; a connector that sends no scales at all is an
+    older one: assume it does."""
+    if isinstance(provides, dict) and provides.get('readiness') is False:
+        return False
+    if not scales:
+        return True
+    r = scales.get('readiness')
+    return bool(r) and not (isinstance(r, dict) and r.get('available') is False)
 
 
 _PROBE = {'at': 0.0, 'list': None}
@@ -214,6 +257,7 @@ def probe_all(fresh=False):
             if s and s['id'] not in ids:
                 ids.add(s['id'])
                 found.append(s)
+        found.sort(key=lambda s: _rank(s['id']))
         _PROBE.update(at=time.time(), list=found)
         return [dict(x) for x in found]
 
@@ -293,7 +337,7 @@ def pull_all(fresh_probe=True, force=False):
         for p in probe_all(fresh=fresh_probe):
             row = rows.get(p['id']) or {}
             prev = json.loads(row['status']) if row.get('status') else {}
-            due = (force or not row.get('last_pull') or _ago(row.get('last_pull')) > PULL_MINUTES * 60
+            due = p['status'] in LIVE and (force or not row.get('last_pull') or _ago(row.get('last_pull')) > PULL_MINUTES * 60
                    or prev.get('last_sync') != p.get('last_sync') or row.get('dataset') != p.get('dataset'))
             got[p['id']] = pull(p) if due else 0
             if not due:
@@ -328,19 +372,36 @@ def _source_rows():
 
 
 def primary_source(live=None, rows=None):
-    """The source the screen and tools use: the owner's pick, else the first connected source holding data."""
+    """The main source the screen and tools use: the owner's pick, else the first connected source in KNOWN order
+    (WHOOP, Oura, Fitbit, Polar, Withings, then any other), preferring one that already holds data."""
     rows = rows if rows is not None else _source_rows()
     live = live if live is not None else {p['id']: p for p in probe_all()}
     chosen = _setting('primary')
     if chosen and (chosen in rows or chosen in live):
         return chosen
-    for sid, p in live.items():
-        if p['status'] in LIVE and rows.get(sid, {}).get('days'):
+    order = sorted(set(live) | set(rows), key=_rank)
+    connected = [s for s in order if s in live and live[s]['status'] in LIVE]
+    for sid in connected:
+        if rows.get(sid, {}).get('days'):
             return sid
-    with_data = [sid for sid, r in rows.items() if r.get('days')]
+    if connected:
+        return connected[0]
+    with_data = [sid for sid in order if rows.get(sid, {}).get('days')]
     if with_data:
         return with_data[0]
-    return next(iter(live), None)
+    return next((s for s in order if s in live), None)
+
+
+def _state(status, installed, connected, last_sync):
+    """The one word the Sources sheet shows: connected, stale (connected but behind), not_set_up, sign_in,
+    needs_update, error or not_installed."""
+    if not installed:
+        return 'not_installed'
+    if status == 'needs_update':
+        return 'needs_update'
+    if connected:
+        return 'stale' if _ago(last_sync) > STALE_HOURS * 3600 else 'connected'
+    return {'not_configured': 'not_set_up', 'needs_login': 'sign_in'}.get(status, 'error')
 
 
 def sources_info():
@@ -349,28 +410,37 @@ def sources_info():
     rows = _source_rows()
     primary = primary_source(live, rows)
     out = []
-    for sid in list(live) + [r for r in rows if r not in live]:
+    for sid in sorted(set(live) | set(rows), key=_rank):
         p, r = live.get(sid), rows.get(sid, {})
         prev = json.loads(r['status']) if r.get('status') else {}
         base = p or prev or {}
         status = p['status'] if p else 'not_installed'
         if p and not p['contract_ok']:
             status = 'needs_update'
+        connected = bool(p) and p['status'] in LIVE and p['contract_ok']
+        scales = base.get('scales') or {}
         out.append({'id': sid, 'name': base.get('name') or r.get('name') or sid, 'provider': base.get('provider') or r.get('provider'),
                     'app_path': base.get('app_path') or r.get('app_path') or f'/{sid}/', 'installed': bool(p), 'status': status,
-                    'connected': bool(p) and p['status'] in LIVE, 'account': base.get('account'),
+                    'state': _state(status, bool(p), connected, base.get('last_sync')),
+                    'connected': connected, 'account': base.get('account'),
                     'last_sync': base.get('last_sync'), 'next_sync': base.get('next_sync') if p else None,
                     'last_pull': r.get('last_pull'), 'pull_error': r.get('pull_error'), 'error': base.get('error') if p else None,
                     'days': r.get('days', 0), 'first_date': r.get('first_date'), 'latest_date': r.get('last_date'),
-                    'scales': base.get('scales') or {}, 'primary': sid == primary})
+                    'scales': scales, 'has_readiness': base.get('has_readiness', _has_readiness(scales)), 'primary': sid == primary})
     have = {s['id']: s for s in out}
     connectors = [{'id': k['id'], 'name': k['name'], 'app_path': k['app_path'], 'blurb': k['blurb'],
                    'installed': k['id'] in live, 'connected': bool(have.get(k['id'], {}).get('connected'))} for k in KNOWN]
-    return {'sources': out, 'primary': primary, 'connectors': connectors}
+    return {'sources': out, 'primary': primary, 'connectors': connectors,
+            'choose_primary': sum(1 for s in out if s['connected']) >= 2}
 
 
 def set_primary(body):
+    """Save the owner's main source (server-side, so every device follows). `auto` (or an empty id) goes back to the
+    default: the first connected source in WHOOP, Oura, Fitbit, Polar, Withings order."""
     sid = str(body.get('id') or '')
+    if sid in ('', 'auto'):
+        _setting('primary', clear=True)
+        return status_info()
     if sid not in _source_rows() and sid not in {p['id'] for p in probe_all()}:
         raise Problem(404, 'No such health source.')
     _setting('primary', sid)
@@ -396,6 +466,19 @@ def _source_arg(args):
     if sid and not ID_RE.match(str(sid)):
         raise Problem(400, 'source must be a source id such as wizard-whoop.')
     return sid
+
+
+def _view(args):
+    """What a read covers: (main source, the sources in order whose days are merged). An explicit `source` reads that
+    one source alone; otherwise the main source, with any metric it lacks on a day filled from the other sources."""
+    if args.get('source'):
+        sid = _source_arg(args)
+        return sid, [sid]
+    sid = primary_source()
+    if not sid:
+        return None, []
+    others = sorted((s for s, r in _source_rows().items() if s != sid and r.get('days')), key=_rank)
+    return sid, [sid] + others
 
 
 def _check_day(v, name):
@@ -438,12 +521,100 @@ def _latest_date(sid):
     return rows[0]['date'] if rows else None
 
 
-def _default_range(args, sid, span=30):
+# Per-day merge across sources. Each key is one metric: a section (readiness, sleep, load) counts as present when its
+# main number is there; workouts when the source sent a list (an empty list means "none that day"); the rest when the
+# value is a number. A metric the main source lacks is taken whole from the first other source that has it.
+_SECTION = {'readiness': 'score', 'sleep': 'asleep_h', 'load': 'value'}
+MERGE_KEYS = ('readiness', 'hrv_ms', 'resting_hr_bpm', 'spo2_pct', 'skin_temp_c', 'skin_temp_delta_c', 'respiratory_rate',
+              'sleep', 'load', 'calories_kcal', 'energy_kj', 'avg_hr_bpm', 'max_hr_bpm', 'steps', 'workouts')
+
+
+def _present(key, v):
+    if key in _SECTION:
+        return isinstance(v, dict) and _num(v.get(_SECTION[key]))
+    if key == 'workouts':
+        return isinstance(v, list)
+    return _num(v)
+
+
+def merge_day(date, main, recs):
+    """One day from the main source's record (`recs[main]`, may be missing), every metric it lacks filled from the
+    other sources in `recs` (in order). Adds `source` (the main source) and `origins` (metric -> source id, only for
+    metrics present) and `filled` (the metrics taken from another source)."""
+    own = recs.get(main)
+    out = dict(own) if own else {'date': date, 'updated_at': None}
+    origins = {k: main for k in MERGE_KEYS if own and _present(k, own.get(k))}
+    # A score the main source says is still coming (readiness.state pending: scored after waking) is not missing:
+    # filling it from another wearable for an hour and then switching would only confuse.
+    pending = bool(own) and (own.get('readiness') or {}).get('state') == 'pending'
+    extras = dict(out.get('extras') or {})
+    for sid, r in recs.items():
+        if sid == main or not r:
+            continue
+        for k in MERGE_KEYS:
+            if k not in origins and _present(k, r.get(k)) and not (pending and k == 'readiness'):
+                out[k] = r[k]
+                origins[k] = sid
+        for prov, ex in (r.get('extras') or {}).items():
+            extras.setdefault(prov, ex)
+    if extras:
+        out['extras'] = extras
+    out['source'] = main
+    out['origins'] = origins
+    out['filled'] = sorted(k for k, s in origins.items() if s != main)
+    return out
+
+
+# A day's load repeats its source's scales.load; these keys come from scales.load when the record leaves them out,
+# so every record can be judged on its own scale (targets often live only in the status).
+_LOAD_KEYS = ('max', 'scale_max', 'targets', 'over_margin', 'unit')
+
+
+def _load_scales(ids):
+    """Source id -> its scales.load (from the live probe, else what Health stored from the last one)."""
+    live = {p['id']: p for p in probe_all()}
+    rows = _source_rows()
+    out = {}
+    for sid in ids:
+        p = live.get(sid) or (json.loads(rows[sid]['status']) if rows.get(sid, {}).get('status') else {})
+        sc = (p.get('scales') or {}).get('load')
+        out[sid] = sc if isinstance(sc, dict) else {}
+    return out
+
+
+def _with_scale(d, scales):
+    ld = d.get('load')
+    if not isinstance(ld, dict):
+        return d
+    sc = scales.get((d.get('origins') or {}).get('load') or d.get('source')) or {}
+    extra = {k: sc[k] for k in _LOAD_KEYS if k not in ld and k in sc}
+    return dict(d, load=dict(ld, **extra)) if extra else d
+
+
+def _read(view, frm=None, to=None, limit=None, newest_first=True):
+    """Day records for a view: the main source's day per date, with missing metrics filled from the others."""
+    main, ids = view
+    if not main:
+        return []
+    per = {sid: {d['date']: d for d in _days(sid, frm, to, limit, newest_first)} for sid in ids}
+    dates = sorted(set().union(*per.values()), reverse=newest_first)
+    if limit:
+        dates = dates[:int(limit)]
+    scales = _load_scales(ids)
+    return [_with_scale(merge_day(day, main, {sid: per[sid].get(day) for sid in ids}), scales) for day in dates]
+
+
+def _view_latest(view):
+    got = [d for d in (_latest_date(s) for s in view[1]) if d]
+    return max(got) if got else None
+
+
+def _default_range(args, view, span=30):
     frm, to = _check_day(args.get('from'), 'from'), _check_day(args.get('to'), 'to')
     if frm and to and frm > to:
         raise Problem(400, 'from must be on or before to.')
     if not frm and not to:
-        to = _latest_date(sid)
+        to = _view_latest(view)
         frm = (dt.date.fromisoformat(to) - dt.timedelta(days=span - 1)).isoformat() if to else None
     return frm, to
 
@@ -468,7 +639,52 @@ def _hm(h):
 # One traffic light for all three metrics, the same rules as the screen (web/words.js): green good, yellow okay,
 # red needs attention; None = no data (grey).
 _LIGHT = {'hi': 'green', 'md': 'yellow', 'lo': 'red'}
-_REC_TARGET = {'hi': (14, 18), 'md': (10, 14), 'lo': (0, 10)}   # WHOOP's own strain guidance per recovery band
+# WHOOP's own strain guidance per recovery band, on its 0-21 scale. Any other scale gets the same fractions of its
+# scale_max (14/21 ... 18/21), unless the source sends its own targets.
+_REC_TARGET = {'hi': (14, 18), 'md': (10, 14), 'lo': (0, 10)}
+_BASE_MAX, _SLACK = 21, 3
+_BAND_KEY = {'hi': 'high', 'md': 'medium', 'lo': 'low'}
+
+
+def _clean(x):
+    """14.0 -> 14, 66.66 -> 66.7: whole numbers stay whole in JSON and in words."""
+    x = math.floor(float(x) * 10 + 0.5) / 10          # half up, exactly as the screen's Math.round
+    return int(x) if x.is_integer() else x
+
+
+def load_targets(load=None):
+    """The activity target per recovery band for a day's load: {'hi': (lo, hi), 'md': ..., 'lo': ..., 'slack': n,
+    'scale_max': m, 'from': 'source'|'scale'}, or None when the load has no scale to judge it by.
+    No load at all (older callers) means WHOOP's 0-21 scale."""
+    if load is None:
+        load = {'scale_max': _BASE_MAX}
+    if not isinstance(load, dict):
+        return None
+    smax = load.get('scale_max') if _num(load.get('scale_max')) else load.get('max')
+    smax = smax if _num(smax) and smax > 0 else None
+    hints = load.get('targets') if isinstance(load.get('targets'), dict) else {}
+    out = {}
+    for b, key in _BAND_KEY.items():
+        h = hints.get(key)
+        if isinstance(h, (list, tuple)) and len(h) == 2 and all(_num(x) for x in h) and h[0] <= h[1]:
+            out[b] = (_clean(h[0]), _clean(h[1]))
+        elif smax:
+            nice = (lambda v: int(math.floor(v + 0.5))) if smax >= 50 else _clean
+            out[b] = tuple(nice(x * smax / _BASE_MAX) for x in _REC_TARGET[b])
+        else:
+            return None
+    if _num(load.get('over_margin')) and load['over_margin'] >= 0:
+        slack = _clean(load['over_margin'])                 # the source's own "a bit much" margin
+    elif smax:
+        slack = _clean(_SLACK * smax / _BASE_MAX)
+    else:
+        slack = _clean(0.75 * (out['md'][1] - out['md'][0]))
+    out.update(slack=slack, scale_max=_clean(smax) if smax else None, **{'from': 'source' if hints else 'scale'})
+    return out
+
+
+def _target_text(b, t):
+    return f"under {t['lo'][1]}" if b == 'lo' else f'{t[b][0]}-{t[b][1]}'
 
 
 def _num(v):
@@ -494,15 +710,18 @@ def sleep_band(asleep_h, need_h):
             'pct_of_need': round(pct * 100) if pct is not None else None, 'by': 'need' if pct is not None else 'hours'}
 
 
-def activity_match(strain, score):
-    """How well a day's strain matched that day's recovery. Target: Ready 14-18, So-so 10-14, Run down under 10.
-    Green inside the target (or below it on a Run down day); yellow up to 3 outside ('A bit much' / 'Room to push');
-    red more than 3 above ('Too much for today'). Under-doing is never red. None when either value is missing."""
+def activity_match(strain, score, load=None):
+    """How well a day's effort matched that day's recovery. Target from the recovery band, on the load's own scale
+    (WHOOP 0-21: Ready 14-18, So-so 10-14, Run down under 10; other scales the same fractions of scale_max, or the
+    source's own targets). Green inside the target (or below it on a Run down day); yellow up to the slack (3 on
+    WHOOP's scale) above ('A bit much') or anywhere below ('Room to push'); red more than the slack above ('Too much
+    for today'). Under-doing is never red. None when either value is missing or the load has no scale."""
     r = _rec_band(score)
-    if not _num(strain) or not r:
+    t = load_targets(load)
+    if not _num(strain) or not r or not t:
         return None
-    v, (lo, hi) = round(strain * 10) / 10, _REC_TARGET[r]
-    if v > hi + 3:
+    v, (lo, hi) = round(strain * 10) / 10, t[r]
+    if v > hi + t['slack']:
         b, side, word = 'lo', 'over', 'Too much for today'
     elif v > hi:
         b, side, word = 'md', 'over', 'A bit much'
@@ -511,7 +730,8 @@ def activity_match(strain, score):
     else:
         b, side, word = 'md', 'under', 'Room to push'
     return {'colour': _LIGHT[b], 'word': word, 'side': side, 'strain': v,
-            'target': 'under 10' if r == 'lo' else f'{lo}-{hi}', 'target_low': lo, 'target_high': hi}
+            'target': _target_text(r, t), 'target_low': lo, 'target_high': hi,
+            'scale_max': t['scale_max'], 'target_from': t['from']}
 
 
 def _lights(d):
@@ -520,7 +740,7 @@ def _lights(d):
     score = (d.get('readiness') or {}).get('score')
     rb = _rec_band(score)
     return {'recovery_colour': _LIGHT.get(rb), 'sleep_band': sleep_band(sl.get('asleep_h'), sl.get('need_h')),
-            'activity_match': activity_match(ld.get('value'), score)}
+            'activity_match': activity_match(ld.get('value'), score, ld)}
 
 
 def _scored(d):
@@ -528,35 +748,79 @@ def _scored(d):
     return r.get('score') is not None and r.get('state', 'scored') == 'scored'
 
 
+def _names():
+    """Source id -> its name, for every source Health knows."""
+    return {s['id']: s['name'] for s in sources_info()['sources']}
+
+
+def _no_score_from(d, info=None):
+    """The name of the source to credit in 'No score from <source>' when a day has no readiness score because none
+    of the sources it came from gives one; None otherwise (a missing score is then just 'not scored yet')."""
+    if _num((d.get('readiness') or {}).get('score')):
+        return None
+    srcs = {s['id']: s for s in (info or sources_info())['sources']}
+    used = [d.get('source')] + [v for v in (d.get('origins') or {}).values() if v != d.get('source')]
+    used = [u for u in dict.fromkeys(used) if u]
+    if not used or any(srcs.get(u, {}).get('has_readiness', True) for u in used):
+        return None
+    return srcs.get(used[0], {}).get('name') or used[0]
+
+
+def _with_meta(d, names):
+    """The additive per-day fields: traffic lights, and the name of every source a metric came from."""
+    used = sorted(set((d.get('origins') or {}).values()) | ({d['source']} if d.get('source') else set()), key=_rank)
+    return dict(d, **_lights(d), source_names={s: names.get(s, s) for s in used})
+
+
+_PLAIN = {'readiness': 'recovery', 'load': 'activity', 'hrv_ms': 'HRV', 'resting_hr_bpm': 'resting HR', 'spo2_pct': 'blood oxygen',
+          'skin_temp_c': 'skin temp', 'skin_temp_delta_c': 'skin temp change', 'respiratory_rate': 'breathing rate',
+          'calories_kcal': 'calories', 'energy_kj': 'energy', 'avg_hr_bpm': 'average HR', 'max_hr_bpm': 'max HR'}
+
+
 def daily_summary(args=None):
     """The latest day (or the given day) in one compact shape, for the screen, the agent and other apps."""
     args = args or {}
-    sid = _source_arg(args)
+    view = _view(args)
+    sid = view[0]
     day = _check_day(args.get('day'), 'day')
-    meta = _meta(sid) if sid else {}
+    info = sources_info()
+    meta = next((x for x in info['sources'] if x['id'] == sid), None) or ({'id': sid, 'name': sid, 'scales': {}} if sid else {})
+    names = {s['id']: s['name'] for s in info['sources']}
     base = {'source': sid, 'source_name': meta.get('name'), 'connected': bool(meta.get('connected')),
             'last_sync': meta.get('last_sync'), 'last_pull': meta.get('last_pull'), 'labels': _labels(meta)}
     if not sid:
         return dict(base, available=False, day=day, text='No health source is connected yet. Connect one (for example WHOOP) in its own app.')
-    rows = _days(sid, to=day, limit=4)
+    rows = _read(view, to=day, limit=4)
     if not rows or (day and rows[0]['date'] != day):
         return dict(base, available=False, day=day, text='No health data for that day yet.' if day else 'No health data synced yet.')
     d = dict(rows[0])
+    d['origins'] = dict(d.get('origins') or {})
     readiness_date = d['date']
     # Readiness is scored after waking; before that the newest day has no score yet. Report the latest scored one.
     if not day and not _scored(d):
         prev = next((r for r in rows[1:] if _scored(r)), None)
         if prev:
             readiness_date = prev['date']
-            for k in ('readiness', 'hrv_ms', 'resting_hr_bpm', 'spo2_pct', 'skin_temp_c', 'skin_temp_delta_c'):
-                d[k] = prev.get(k)
+            keys = ['readiness', 'hrv_ms', 'resting_hr_bpm', 'spo2_pct', 'skin_temp_c', 'skin_temp_delta_c']
             if not d.get('sleep'):
-                d['sleep'] = prev.get('sleep')
+                keys.append('sleep')
+            for k in keys:
+                d[k] = prev.get(k)
+                if (prev.get('origins') or {}).get(k):
+                    d['origins'][k] = prev['origins'][k]
+                else:
+                    d['origins'].pop(k, None)
+            d['filled'] = sorted(k for k, s in d['origins'].items() if s != sid)
     lb = base['labels']
     parts = []
     rd = d.get('readiness') or {}
+    nofrom = _no_score_from(d, info)
     if rd.get('score') is not None:
         parts.append(f"{lb['readiness']} {rd['score']:g}%" + (f" ({rd['band']})" if rd.get('band') else '') +
+                     (f", HRV {d['hrv_ms']:g} ms" if d.get('hrv_ms') is not None else '') +
+                     (f", resting HR {d['resting_hr_bpm']:g} bpm" if d.get('resting_hr_bpm') is not None else ''))
+    elif nofrom:
+        parts.append(f"no recovery score from {nofrom}" +
                      (f", HRV {d['hrv_ms']:g} ms" if d.get('hrv_ms') is not None else '') +
                      (f", resting HR {d['resting_hr_bpm']:g} bpm" if d.get('resting_hr_bpm') is not None else ''))
     sl = d.get('sleep') or {}
@@ -567,23 +831,34 @@ def daily_summary(args=None):
         parts.append(f"{(ld.get('label') or lb['load']).lower()} {ld['value']:g}" + (f" of {ld['max']:g}" if ld.get('max') else ''))
     if d.get('workouts'):
         parts.append(f"{len(d['workouts'])} workout" + ('s' if len(d['workouts']) != 1 else ''))
+    filled = [(k, d['origins'][k]) for k in d.get('filled') or []]
+    if filled:
+        by = {}
+        for k, s in filled:
+            by.setdefault(names.get(s, s), []).append(_PLAIN.get(k, k.replace('_', ' ')))
+        parts.append('; '.join(f"{', '.join(ks)} from {n}" for n, ks in by.items()))
     try:
         old = (dt.date.today() - dt.date.fromisoformat(d['date'])).days
     except ValueError:
         old = None
+    m = _with_meta(d, names)
     return dict(base, available=True, day=d['date'], readiness_date=readiness_date, days_old=old,
                 readiness=d.get('readiness'), hrv_ms=d.get('hrv_ms'), resting_hr_bpm=d.get('resting_hr_bpm'),
                 spo2_pct=d.get('spo2_pct'), skin_temp_c=d.get('skin_temp_c'), skin_temp_delta_c=d.get('skin_temp_delta_c'),
                 respiratory_rate=d.get('respiratory_rate'), sleep=d.get('sleep'), load=d.get('load'),
                 calories_kcal=d.get('calories_kcal'), avg_hr_bpm=d.get('avg_hr_bpm'), max_hr_bpm=d.get('max_hr_bpm'),
-                steps=d.get('steps'), workouts=d.get('workouts') or [], **_lights(d),
+                steps=d.get('steps'), workouts=d.get('workouts') or [],
+                recovery_colour=m['recovery_colour'], sleep_band=m['sleep_band'], activity_match=m['activity_match'],
+                origins=d['origins'], filled=d.get('filled') or [], source_names=m['source_names'], no_readiness_from=nofrom,
                 text=('; '.join(parts) + '.') if parts else 'Not scored yet.')
 
 
 def days_list(args):
-    sid = _source_arg(args)
-    frm, to = _default_range(args, sid)
-    return {'source': sid, 'from': frm, 'to': to, 'days': [dict(d, **_lights(d)) for d in _days(sid, frm, to, _limit(args, 100, 400))]}
+    view = _view(args)
+    frm, to = _default_range(args, view)
+    names = _names()
+    return {'source': view[0], 'merged_from': view[1], 'from': frm, 'to': to,
+            'days': [_with_meta(d, names) for d in _read(view, frm, to, _limit(args, 100, 400))]}
 
 
 def _avg(xs):
@@ -604,13 +879,14 @@ def trends(args):
         raise Problem(400, 'days must be 7, 30 or 90.') from None
     if n not in (7, 30, 90):
         raise Problem(400, 'days must be 7, 30 or 90.')
-    sid = _source_arg(args)
+    view = _view(args)
+    sid = view[0]
     meta = _meta(sid) if sid else {}
-    end_s = _latest_date(sid)
+    end_s = _view_latest(view)
     end = dt.date.fromisoformat(end_s) if end_s else dt.date.today()
     frm = end - dt.timedelta(days=n - 1)
-    cur = _days(sid, frm.isoformat(), end.isoformat(), newest_first=False)
-    prev = _days(sid, (end - dt.timedelta(days=2 * n - 1)).isoformat(), (frm - dt.timedelta(days=1)).isoformat())
+    cur = _read(view, frm.isoformat(), end.isoformat(), newest_first=False)
+    prev = _read(view, (end - dt.timedelta(days=2 * n - 1)).isoformat(), (frm - dt.timedelta(days=1)).isoformat())
     by = {d['date']: d for d in cur}
     series = []
     for i in range(n):
@@ -623,31 +899,35 @@ def trends(args):
         a, b = _avg([f(d) for d in cur]), _avg([f(d) for d in prev])
         summary[k] = {'avg': a, 'previous_avg': b, 'change': round(a - b, 1) if a is not None and b is not None else None}
     bands = {b: sum(1 for s in series if s['band'] == b) for b in ('high', 'medium', 'low')}
-    return {'source': sid, 'days': n, 'from': frm.isoformat(), 'to': end.isoformat(), 'labels': _labels(meta),
-            'summary': summary, 'readiness_bands': bands, 'days_with_data': len(cur), 'series': series}
+    filled = sorted({k for d in cur for k in d.get('filled') or []})
+    return {'source': sid, 'merged_from': view[1], 'days': n, 'from': frm.isoformat(), 'to': end.isoformat(), 'labels': _labels(meta),
+            'summary': summary, 'readiness_bands': bands, 'days_with_data': len(cur), 'series': series,
+            'filled_metrics': filled}
 
 
 def workouts(args):
-    sid = _source_arg(args)
-    frm, to = _default_range(args, sid)
+    view = _view(args)
+    frm, to = _default_range(args, view)
     out = []
-    for d in _days(sid, frm, to):
+    for d in _read(view, frm, to):
         for w in reversed(d.get('workouts') or []):
-            out.append(dict(w, date=d['date']))
-    return {'source': sid, 'from': frm, 'to': to, 'count': len(out), 'workouts': out[:_limit(args)]}
+            out.append(dict(w, date=d['date'], source=(d.get('origins') or {}).get('workouts', d.get('source'))))
+    return {'source': view[0], 'from': frm, 'to': to, 'count': len(out), 'workouts': out[:_limit(args)]}
 
 
 def sleep_list(args):
-    sid = _source_arg(args)
-    frm, to = _default_range(args, sid)
-    out = [dict(d['sleep'], date=d['date']) for d in _days(sid, frm, to, _limit(args)) if d.get('sleep')]
-    return {'source': sid, 'from': frm, 'to': to, 'sleep': out}
+    view = _view(args)
+    frm, to = _default_range(args, view)
+    out = [dict(d['sleep'], date=d['date'], source=(d.get('origins') or {}).get('sleep', d.get('source')))
+           for d in _read(view, frm, to, _limit(args)) if d.get('sleep')]
+    return {'source': view[0], 'from': frm, 'to': to, 'sleep': out}
 
 
 def status_info():
     info = sources_info()
     return {'app': APP_ID, 'version': VERSION, 'primary': info['primary'], 'sources': info['sources'],
-            'connectors': info['connectors'], 'connected': any(s['connected'] for s in info['sources'])}
+            'connectors': info['connectors'], 'connected': any(s['connected'] for s in info['sources']),
+            'choose_primary': info['choose_primary']}
 
 
 # ---------------- MCP ----------------
@@ -659,9 +939,9 @@ _RANGE = {'type': 'object', 'properties': dict({'from': {'type': 'string', 'desc
           'additionalProperties': False}
 RO = {'readOnlyHint': True}
 TOOLS = [
-    {'name': 'health_daily_summary', 'description': "The owner's latest day (or a given day) from Health: readiness/recovery score 0-100 with band (high/medium/low), HRV, resting HR, SpO2, skin temp, last night's sleep (hours, stages, score, efficiency, respiratory rate), the day's load on the source's own scale (WHOOP: strain of 21), calories and workouts, plus a one-line text. Also the screen's one traffic light (green good, yellow okay, red needs attention): recovery_colour; sleep_band (colour, word Enough/A bit short/Short, pct_of_need: green 85%+, yellow 70-85%, red under 70%); activity_match (colour, word Right amount/A bit much/Room to push/Too much for today, target strain range from that day's recovery: Ready 14-18, So-so 10-14, Run down under 10). Labels come from the source. Omit day for the latest; readiness is scored after waking, so early in the day it reports the latest scored day (readiness_date).",
+    {'name': 'health_daily_summary', 'description': "The owner's latest day (or a given day) from Health: readiness/recovery score 0-100 with band (high/medium/low), HRV, resting HR, SpO2, skin temp, last night's sleep (hours, stages, score, efficiency, respiratory rate), the day's load on the source's own scale (WHOOP: strain of 21), calories and workouts, plus a one-line text. Also the screen's one traffic light (green good, yellow okay, red needs attention): recovery_colour; sleep_band (colour, word Enough/A bit short/Short, pct_of_need: green 85%+, yellow 70-85%, red under 70%); activity_match (colour, word Right amount/A bit much/Room to push/Too much for today, target strain range from that day's recovery: Ready 14-18, So-so 10-14, Run down under 10). Labels come from the source. Omit day for the latest; readiness is scored after waking, so early in the day it reports the latest scored day (readiness_date). With several wearables: `source` is the owner's main source, `origins` maps each metric to the source it came from, `filled` lists metrics taken from another source because the main one had none that day, `source_names` names them, and `no_readiness_from` names the source when it gives no recovery score at all (never invented). Activity targets scale to the source's own load scale (activity_match.scale_max).",
      'inputSchema': {'type': 'object', 'properties': dict({'day': {'type': 'string', 'description': 'YYYY-MM-DD (optional)'}}, **_SRC), 'additionalProperties': False}, 'annotations': RO},
-    {'name': 'health_days', 'description': 'Day-by-day health records (readiness, HRV, resting HR, SpO2, skin temp, sleep, load, calories, workouts, extras, plus recovery_colour, sleep_band and activity_match as in health_daily_summary) between from and to, newest first. Use for specific dates or weeks.',
+    {'name': 'health_days', 'description': 'Day-by-day health records (readiness, HRV, resting HR, SpO2, skin temp, sleep, load, calories, workouts, extras, plus recovery_colour, sleep_band and activity_match as in health_daily_summary) between from and to, newest first. Each day is the main source record with any missing metric filled from another source: `source`, `origins` (metric -> source id), `filled`, `source_names`. Pass source=<id> to read one source alone. Use for specific dates or weeks.',
      'inputSchema': _RANGE, 'annotations': RO},
     {'name': 'health_trends', 'description': 'Averages and a day series over the last 7, 30 or 90 days for readiness, HRV, resting HR, sleep hours, sleep score, load and calories, with the change versus the previous period and the count of high/medium/low readiness days.',
      'inputSchema': {'type': 'object', 'properties': dict({'days': {'type': 'integer', 'enum': [7, 30, 90]}}, **_SRC), 'additionalProperties': False}, 'annotations': RO},
@@ -669,7 +949,7 @@ TOOLS = [
      'inputSchema': _RANGE, 'annotations': RO},
     {'name': 'health_workouts', 'description': 'Workouts by date range, newest first: sport, start/end, minutes, load on the source scale, average and max HR, calories, distance, minutes per heart-rate zone 0-5.',
      'inputSchema': _RANGE, 'annotations': RO},
-    {'name': 'health_status', 'description': "Which health sources Health reads (e.g. WHOOP), whether each is connected, how fresh its data is (source last_sync, Health last_pull, latest day) and which connector apps exist. If nothing is connected, send the owner the connector app link it lists (e.g. [WHOOP](/wizard-whoop/)); setup happens only on that app's screen, never in chat.",
+    {'name': 'health_status', 'description': "Which health sources Health reads (WHOOP, Oura, Fitbit, Polar, Withings or any other connector), whether each is connected (`state`: connected, stale, not_set_up, sign_in, needs_update, not_installed), which one is the main source (`primary`; the owner picks it in the Sources sheet when two or more are connected), whether it gives a recovery score (`has_readiness`), how fresh its data is (source last_sync, Health last_pull, latest day) and which connector apps exist. If nothing is connected, send the owner the connector app link it lists (e.g. [WHOOP](/wizard-whoop/)); setup happens only on that app's screen, never in chat.",
      'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}, 'annotations': RO},
 ]
 

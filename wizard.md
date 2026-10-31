@@ -4,8 +4,8 @@ id: wizard-health
 name: Health
 type: view
 category: app
-version: 0.9.0
-summary: Your recovery, sleep and activity from a wearable like WHOOP, each in one plain sentence, with every day as a square like a GitHub graph.
+version: 0.10.0
+summary: Your recovery, sleep and activity from your wearables, each in one plain sentence, every day as a square like a GitHub graph.
 tags: [data]
 license: GPL-3.0-only
 icon: icon.png
@@ -51,4 +51,4 @@ In a wide window all three sit side by side and move together. In a narrow windo
 
 A dot in the corner shows how fresh your sources are and opens them.
 
-Health reads connector apps that fill the `health-data` spot (contract `wizard.health-data/1`, see `docs/health-data-contract.md`): WHOOP today, other wearables later, with no change to Health. Connecting happens in each connector's own app; Health never asks for a wearable's keys. It keeps its own copy of the days it has read, so the screen and your agent stay fast, and other apps (such as a morning report) can read the daily summary at `GET /api/summary`.
+Health reads every connector app that fills the `health-data` spot (contract `wizard.health-data/1`, see `docs/health-data-contract.md`): WHOOP, Oura, Fitbit, Polar, Withings or any other, with no change to Health. Sources lists each one (connected, behind, or not set up with a **Set up** link to its own app). With two or more connected you pick the **main** source; each day uses its numbers, and anything it missed that day comes from another wearable with a small "from Oura" note. Activity targets follow each wearable's own scale. A wearable that gives no recovery score shows "No score from …", never a made-up one. Connecting happens in each connector's own app; Health never asks for a wearable's keys. It keeps its own copy of the days it has read, so the screen and your agent stay fast, and other apps (such as a morning report) can read the daily summary at `GET /api/summary`.

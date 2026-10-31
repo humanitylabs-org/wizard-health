@@ -49,6 +49,7 @@ class Connector:
             d = (END - dt.timedelta(days=n - 1 - i)).isoformat()
             self.days[d] = (make_day(d, i, label, mx, provider), 1)
         self.calls = []
+        self.scales = None          # None = the default WHOOP-like scales below
         self.status = 'connected'
         self.last_sync = '2026-10-20T08:00:00.000Z'
 
@@ -88,9 +89,10 @@ class Connector:
                                             'status': me.status, 'account': {'name': 'Sam'}, 'dataset': me.dataset, 'last_sync': me.last_sync,
                                             'next_sync': None, 'history_from': min(me.days), 'latest_date': max(me.days),
                                             'counts': {'days': len(me.days)}, 'error': None,
-                                            'scales': {'readiness': {'label': 'Recovery' if me.provider == 'whoop' else 'Readiness', 'min': 0, 'max': 100},
-                                                       'sleep_score': {'label': 'Sleep performance' if me.provider == 'whoop' else 'Sleep score', 'min': 0, 'max': 100},
-                                                       'load': {'label': me.label, 'min': 0, 'max': me.mx}}})
+                                            'scales': me.scales if me.scales is not None else {
+                                                'readiness': {'label': 'Recovery' if me.provider == 'whoop' else 'Readiness', 'min': 0, 'max': 100},
+                                                'sleep_score': {'label': 'Sleep performance' if me.provider == 'whoop' else 'Sleep score', 'min': 0, 'max': 100},
+                                                'load': {'label': me.label, 'min': 0, 'max': me.mx}}})
                 if u.path == '/api/days':
                     since = int(q['changed_since'].split('.')[1]) if q.get('changed_since') else 0
                     page = json.loads(base64.urlsafe_b64decode(q['page'])) if q.get('page') else {}
@@ -302,6 +304,244 @@ class HealthTest(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class MultiSourceTest(unittest.TestCase):
+    """0.10: several connectors at once. Discovery through the grants file's provider_endpoints_all (every provider)
+    or, with an older App Manager, the built-in list; one main source (default in WHOOP, Oura, Fitbit, Polar, Withings
+    order, the owner's pick saved server-side); per-day fill of missing metrics with their origin; a source with no
+    readiness score; per-source states for the Sources sheet."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(ROOT / 'app'))
+        import server
+        cls.S = S = importlib.reload(server)          # the full built-in list (HealthTest narrows it)
+        cls.saved = (S.GRANTS_FILE, S.ENV_SOURCES, S.DATA, S.KNOWN)
+        cls.tmp = Path(tempfile.mkdtemp())
+        # WHOOP: 10 days, its own 0-21 scale with scale_max; Oura: 12 days (two newer), a 0-100 activity score
+        cls.whoop = Connector('wizard-whoop', 'WHOOP', 'whoop', 'Strain', 21, 10)
+        cls.oura = Connector('wizard-oura', 'Oura', 'oura', 'Activity', 100, 12)
+        for d, (day, seq) in list(cls.whoop.days.items()):
+            day['load']['scale_max'] = 21
+        cls.gap = (END - dt.timedelta(days=3)).isoformat()
+        day, seq = cls.whoop.days[cls.gap]
+        cls.whoop.days[cls.gap] = (dict(day, sleep=None, steps=None), seq)     # WHOOP missed that night's sleep and steps
+        # Withings: no readiness score at all (its scales have none), heart numbers and sleep only
+        cls.withings = Connector('wizard-withings', 'Withings', 'withings', 'Steps', 0, 5)
+        cls.withings.scales = {'sleep_score': {'label': 'Sleep score', 'min': 0, 'max': 100}, 'load': None}
+        for d, (day, seq) in list(cls.withings.days.items()):
+            cls.withings.days[d] = (dict(day, readiness=None, load=None, workouts=None, hrv_ms=41.0, resting_hr_bpm=58), seq)
+        # Fitbit-shaped: readiness marked unavailable, Active Zone Minutes with no top; targets and margin only in scales
+        cls.fitbit = Connector('wizard-fitbit', 'Fitbit', 'fitbit', 'Active Zone Minutes', None, 4)
+        cls.fitbit.scales = {'readiness': {'label': 'Readiness', 'min': 0, 'max': 100, 'available': False},
+                             'load': {'label': 'Active Zone Minutes', 'unit': 'min', 'min': 0, 'max': None, 'scale_max': 60,
+                                      'targets': {'high': [22, 45], 'medium': [10, 22], 'low': [0, 10]}, 'over_margin': 15}}
+        for i, (d, (day, seq)) in enumerate(list(cls.fitbit.days.items())):
+            cls.fitbit.days[d] = (dict(day, readiness=None, load={'value': [30, 50, 5, 61][i], 'max': None, 'label': 'Active Zone Minutes',
+                                                                  'scale_max': 60, 'unit': 'min'}), seq)
+        # Polar: installed, not set up yet
+        cls.polar = Connector('wizard-polar', 'Polar', 'polar', 'Training load', 0, 1)
+        cls.polar.status = 'not_configured'
+        cls.polar.days = {}
+        cls.polar.days[END.isoformat()] = (make_day(END.isoformat(), 0), 1)
+        cls.srv = {c.sid: serve(c.handler()) for c in (cls.whoop, cls.oura, cls.withings, cls.polar, cls.fitbit)}
+        cls.url = {sid: f'http://127.0.0.1:{s.server_address[1]}' for sid, s in cls.srv.items()}
+
+    @classmethod
+    def tearDownClass(cls):
+        S = cls.S
+        S.GRANTS_FILE, S.ENV_SOURCES, S.DATA, S.KNOWN = cls.saved
+        S._PROBE.update(at=0, list=None)
+        for s in cls.srv.values():
+            s.shutdown()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def fresh_box(self, grants, known_urls=None):
+        """A clean Health copy with this grants file and the built-in list pointing at the fake connectors."""
+        S = self.S
+        S.DATA = self.tmp / ('data-' + str(len(list(self.tmp.iterdir()))))
+        g = self.tmp / 'grants.json'
+        g.write_text(json.dumps(grants))
+        S.GRANTS_FILE, S.ENV_SOURCES = str(g), []
+        urls = known_urls or {}
+        S.KNOWN = [dict(k, base=urls.get(k['id'], 'http://127.0.0.1:9')) for k in self.saved[3]]
+        S._PROBE.update(at=0, list=None)
+        S.pull_all(force=True)
+
+    def test_1_grants_list_every_provider(self):
+        S = self.S
+        # what an App Manager with provider_endpoints_all writes: Oura listed first, every provider named
+        self.fresh_box({'outgoing': {'slot:health-data': 'x'}, 'incoming': [], 'enforce': False,
+                        'provider_endpoints': {'slot:health-data': self.url['wizard-oura']},
+                        'provider_endpoints_all': {'slot:health-data': {k: self.url[k] for k in ('wizard-oura', 'wizard-whoop', 'wizard-polar', 'wizard-withings')}}})
+        info = S.sources_info()
+        self.assertEqual([s['id'] for s in info['sources']], ['wizard-whoop', 'wizard-oura', 'wizard-polar', 'wizard-withings'])   # KNOWN order
+        self.assertEqual(info['primary'], 'wizard-whoop')            # default: first connected in WHOOP, Oura... order
+        self.assertTrue(info['choose_primary'])
+        st = {s['id']: s for s in info['sources']}
+        self.assertEqual(st['wizard-polar']['state'], 'not_set_up')
+        self.assertFalse(st['wizard-polar']['connected'])
+        self.assertEqual(st['wizard-polar']['days'], 0)              # nothing is read from a connector that is not set up
+        self.assertEqual(st['wizard-polar']['app_path'], '/wizard-polar/')
+        self.assertFalse(st['wizard-withings']['has_readiness'])
+        self.assertTrue(st['wizard-whoop']['has_readiness'])
+        self.assertEqual([c['id'] for c in info['connectors']], ['wizard-whoop', 'wizard-oura', 'wizard-fitbit', 'wizard-polar', 'wizard-withings'])
+        self.assertFalse(next(c for c in info['connectors'] if c['id'] == 'wizard-fitbit')['installed'])
+
+    def test_2_old_grants_known_list_fallback(self):
+        S = self.S
+        # an older App Manager: one endpoint per spot; the rest are found through the built-in list (ids + ports)
+        self.fresh_box({'outgoing': {}, 'incoming': [], 'enforce': False, 'provider_endpoints': {'slot:health-data': self.url['wizard-whoop']}},
+                       known_urls={'wizard-oura': self.url['wizard-oura']})
+        self.assertEqual([s['id'] for s in S.sources_info()['sources']], ['wizard-whoop', 'wizard-oura'])
+
+    def test_3_fill_switch_and_stale(self):
+        S = self.S
+        self.fresh_box({'outgoing': {}, 'incoming': [], 'enforce': False,
+                        'provider_endpoints_all': {'slot:health-data': {k: self.url[k] for k in ('wizard-whoop', 'wizard-oura')}}})
+        # per day: WHOOP's record; only the metrics it lacks come from Oura, marked with their origin
+        d = S.days_list({'from': self.gap, 'to': self.gap})['days'][0]
+        self.assertEqual(d['source'], 'wizard-whoop')
+        self.assertEqual(d['origins']['sleep'], 'wizard-oura')
+        self.assertEqual(d['origins']['steps'], 'wizard-oura')
+        self.assertEqual(d['origins']['readiness'], 'wizard-whoop')
+        self.assertEqual(d['origins']['load'], 'wizard-whoop')
+        self.assertEqual(d['filled'], ['sleep', 'steps'])
+        self.assertEqual(d['source_names'], {'wizard-whoop': 'WHOOP', 'wizard-oura': 'Oura'})
+        self.assertEqual(d['sleep']['asleep_h'], 7.0)
+        self.assertEqual(d['load']['max'], 21)                       # WHOOP's own load, not Oura's
+        full = S.days_list({'from': (END - dt.timedelta(days=1)).isoformat(), 'to': (END - dt.timedelta(days=1)).isoformat()})['days'][0]
+        self.assertEqual(full['filled'], [])
+        # Oura's two older days (WHOOP has none) come whole from Oura
+        old = S.days_list({'to': (END - dt.timedelta(days=10)).isoformat(), 'from': (END - dt.timedelta(days=11)).isoformat()})['days']
+        self.assertEqual(len(old), 2)
+        self.assertTrue(all(set(x['origins'].values()) == {'wizard-oura'} for x in old))
+        t = S.daily_summary({'day': self.gap})
+        self.assertEqual((t['source'], t['origins']['sleep'], t['filled']), ('wizard-whoop', 'wizard-oura', ['sleep', 'steps']))
+        self.assertIn('sleep, steps from Oura', t['text'])
+        self.assertEqual(t['sleep_band']['colour'], 'green')        # judged on the filled sleep
+        # one source alone, on request: no fill
+        self.assertIsNone(S.days_list({'source': 'wizard-whoop', 'from': self.gap, 'to': self.gap})['days'][0]['sleep'])
+        # the owner switches the main source (saved server-side): Oura's records, gaps from WHOOP
+        S.set_primary({'id': 'wizard-oura'})
+        self.assertEqual(S._setting('primary'), 'wizard-oura')
+        self.assertEqual(S.sources_info()['primary'], 'wizard-oura')
+        d = S.days_list({'from': self.gap, 'to': self.gap})['days'][0]
+        self.assertEqual((d['source'], d['origins']['sleep'], d['origins']['load'], d['filled']), ('wizard-oura', 'wizard-oura', 'wizard-oura', []))
+        self.assertEqual(d['load']['max'], 100)
+        self.assertEqual(S.daily_summary()['source_name'], 'Oura')
+        code = S.rpc({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'health_daily_summary', 'arguments': {}}})
+        self.assertEqual(code['result']['structuredContent']['source'], 'wizard-oura')
+        S.set_primary({'id': 'auto'})
+        self.assertIsNone(S._setting('primary'))
+        self.assertEqual(S.sources_info()['primary'], 'wizard-whoop')
+        # a connected source that has not synced for hours is shown as behind
+        keep = self.oura.last_sync
+        try:
+            self.oura.last_sync = '2026-01-01T00:00:00.000Z'
+            S._PROBE.update(at=0, list=None)
+            self.assertEqual(next(s for s in S.sources_info()['sources'] if s['id'] == 'wizard-oura')['state'], 'stale')
+            self.oura.last_sync = S._iso()
+            S._PROBE.update(at=0, list=None)
+            self.assertEqual(next(s for s in S.sources_info()['sources'] if s['id'] == 'wizard-oura')['state'], 'connected')
+        finally:
+            self.oura.last_sync = keep
+
+    def test_4_no_readiness_source(self):
+        S = self.S
+        self.fresh_box({'outgoing': {}, 'incoming': [], 'enforce': False,
+                        'provider_endpoints_all': {'slot:health-data': {k: self.url[k] for k in ('wizard-withings',)}}})
+        self.assertEqual(S.sources_info()['primary'], 'wizard-withings')
+        t = S.daily_summary()
+        self.assertTrue(t['available'])
+        self.assertIsNone(t['recovery_colour'])                       # grey: never a made-up score
+        self.assertIsNone((t['readiness'] or {}).get('score'))
+        self.assertEqual(t['no_readiness_from'], 'Withings')
+        self.assertEqual((t['hrv_ms'], t['resting_hr_bpm']), (41.0, 58))   # heart numbers still there
+        self.assertIsNone(t['activity_match'])
+        self.assertIn('no recovery score from Withings', t['text'])
+        # with WHOOP as well and Withings picked as main: WHOOP's score fills in, marked as WHOOP's
+        self.fresh_box({'outgoing': {}, 'incoming': [], 'enforce': False,
+                        'provider_endpoints_all': {'slot:health-data': {k: self.url[k] for k in ('wizard-withings', 'wizard-whoop')}}})
+        S.set_primary({'id': 'wizard-withings'})
+        t = S.daily_summary({'day': END.isoformat()})
+        self.assertEqual(t['origins']['readiness'], 'wizard-whoop')
+        self.assertEqual(t['origins']['hrv_ms'], 'wizard-withings')
+        self.assertIsNone(t['no_readiness_from'])
+        self.assertIsNotNone(t['recovery_colour'])
+
+    def test_5_scale_aware_targets(self):
+        S = self.S
+        # WHOOP's 0-21 numbers stay exactly as before, with or without scale_max
+        self.assertEqual({b: S.load_targets({'scale_max': 21})[b] for b in ('hi', 'md', 'lo', 'slack')},
+                         {'hi': (14, 18), 'md': (10, 14), 'lo': (0, 10), 'slack': 3})
+        for load in (None, {'max': 21}, {'scale_max': 21, 'max': 21, 'label': 'Strain'}):
+            for v in [x / 2 for x in range(0, 43)]:
+                for r in (0, 20, 33, 34, 50, 66, 67, 90):
+                    a, b = S.activity_match(v, r, load), S.activity_match(v, r)
+                    self.assertEqual((a or {}).get('colour'), (b or {}).get('colour'), (load, v, r))
+                    self.assertEqual((a or {}).get('target'), (b or {}).get('target'))
+        self.assertEqual(S.activity_match(5.8, 41, {'scale_max': 21})['target'], '10-14')
+        self.assertEqual(S.activity_match(3, 20, {'scale_max': 21})['target'], 'under 10')
+        self.assertEqual(S.activity_match(12, 50, {'scale_max': 21})['target_low'], 10)
+        # another scale: the same fractions of its scale_max
+        self.assertEqual(S.load_targets({'scale_max': 100})['md'], (48, 67))
+        self.assertEqual(S.activity_match(55, 50, {'scale_max': 100})['colour'], 'green')
+        self.assertEqual(S.activity_match(30, 50, {'scale_max': 100})['word'], 'Room to push')
+        # explicit target hints from the source win
+        hints = {'scale_max': 100, 'targets': {'high': [70, 90], 'medium': [40, 60], 'low': [0, 30]}}
+        self.assertEqual(S.activity_match(65, 50, hints)['word'], 'A bit much')
+        self.assertEqual(S.activity_match(50, 50, hints)['target'], '40-60')
+        self.assertEqual(S.activity_match(50, 50, hints)['target_from'], 'source')
+        # hints with no scale (zone minutes): slack from the medium band's width
+        zm = {'label': 'Active zone minutes', 'unit': 'zone minutes', 'targets': {'high': [40, 60], 'medium': [20, 40], 'low': [0, 20]}}
+        self.assertEqual(S.activity_match(55.1, 50, zm)['word'], 'Too much for today')   # over 40 + 0.75 x 20
+        self.assertEqual(S.activity_match(50, 50, zm)['word'], 'A bit much')
+        # no scale and no hints: no target, so no colour
+        self.assertIsNone(S.activity_match(30, 50, {'label': 'Steps'}))
+
+    def test_7_fitbit_shape(self):
+        S = self.S
+        # no readiness (available: false), open-ended load whose targets and margin live only in scales.load
+        self.fresh_box({'outgoing': {}, 'incoming': [], 'enforce': False,
+                        'provider_endpoints_all': {'slot:health-data': {'wizard-fitbit': self.url['wizard-fitbit']}}})
+        self.assertFalse(S.sources_info()['sources'][0]['has_readiness'])
+        days = S.days_list({})['days']
+        self.assertEqual(days[0]['load']['targets'], {'high': [22, 45], 'medium': [10, 22], 'low': [0, 10]})   # from scales
+        self.assertEqual(days[0]['load']['over_margin'], 15)
+        self.assertTrue(all(d['activity_match'] is None for d in days))          # no recovery: grey, never invented
+        self.assertEqual(S.daily_summary()['no_readiness_from'], 'Fitbit')
+        # with WHOOP as main: Fitbit's own records still judged on Fitbit's targets when a day's load is filled from it
+        ld = days[0]['load']
+        self.assertEqual(S.activity_match(30, 80, ld)['word'], 'Right amount')    # Ready: 22-45
+        self.assertEqual(S.activity_match(55, 80, ld)['word'], 'A bit much')      # up to 15 over
+        self.assertEqual(S.activity_match(61, 80, ld)['word'], 'Too much for today')
+        self.assertEqual(S.activity_match(15, 80, ld)['word'], 'Room to push')
+        self.assertEqual(S.activity_match(15, 80, ld)['target'], '22-45')
+
+    def test_6_scale_rules_match_screen(self):
+        import shutil as sh
+        import subprocess
+        node = sh.which('node')
+        if not node:
+            self.skipTest('node is not installed')
+        words = ROOT / 'web' / 'words.js'
+        loads = [None, {'scale_max': 21}, {'max': 21}, {'scale_max': 100}, {'scale_max': 10},
+                 {'scale_max': 100, 'targets': {'high': [70, 90], 'medium': [40, 60], 'low': [0, 30]}},
+                 {'unit': 'zone minutes', 'targets': {'high': [40, 60], 'medium': [20, 40], 'low': [0, 20]}}, {'label': 'Steps'},
+                 {'max': None, 'scale_max': 60, 'unit': 'min', 'targets': {'high': [22, 45], 'medium': [10, 22], 'low': [0, 10]}, 'over_margin': 15}]
+        grid = [(v / 2, r, i) for i in range(len(loads)) for v in range(0, 201, 3) for r in (0, 20, 33, 34, 50, 66, 67, 90)]
+        js = subprocess.run([node, '-e', f"const W=require({json.dumps(str(words))});const L={json.dumps(loads)};"
+                             f"process.stdout.write(JSON.stringify({json.dumps(grid)}.map(([v,r,i])=>{{const m=W.actMatch(v,r,L[i]===null?undefined:L[i]);"
+                             f"return m?[m.band,W.targetText(W.recBand(r),L[i]===null?undefined:L[i])]:null}})))"],
+                            check=True, capture_output=True, text=True).stdout
+        light = {'green': 'hi', 'yellow': 'md', 'red': 'lo'}
+        py = []
+        for v, r, i in grid:
+            m = self.S.activity_match(v, r, loads[i])
+            py.append([light[m['colour']], m['target'].replace('-', '\u2013')] if m else None)
+        self.assertEqual(json.loads(js), py)
+
+
 class ViewTest(unittest.TestCase):
     """The one-screen view: picker, one focus card, the graph; every pop-up is the one sheet; band colours never use bare --danger."""
     web = Path(__file__).resolve().parent.parent / 'web'
@@ -370,6 +610,13 @@ class ViewTest(unittest.TestCase):
                      'Heart rate variability', 'higher = more recovered', 'lower is better', 'Time in bed', 'Dreaming (REM)', 'Deep',
                      'did you get enough', 'did it match your recovery', 'Read from your heart overnight, not just your sleep.'):
             self.assertIn(word, js + html + words, word)
+        # 0.10: several sources: per-source states with Set up links to the connector's own app, the main-source choice,
+        # the tiny origin note of a filled metric, and an honest no-score for a source without readiness
+        for word in ("'Set up'", "'Make main'", "'Main'", "'No score from '", "' does not give a recovery score.'", "'from ' + srcName(o)",
+                     "'Behind'", "'Not set up'", "'Set up ' + c.name", "api('api/primary', { id })", 'class="hl-from ffrom"', 'id="setups"'):
+            self.assertIn(word, js + html, word)
+        self.assertIn('actMatch(act(d), recov(d), loadOf(d))', js)          # targets on the source's own scale
+        self.assertIn("'out of ' + mx", js)
         self.assertIn('v >= 67', words); self.assertIn('v >= 34', words)
         self.assertIn('v >= 18', words); self.assertIn('v >= 14', words); self.assertIn('v >= 10', words)
         self.assertIn('0.85', words); self.assertIn('0.70', words)
