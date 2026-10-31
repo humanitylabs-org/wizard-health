@@ -4,7 +4,7 @@ id: wizard-health
 name: Health
 type: view
 category: app
-version: 0.7.0
+version: 0.8.0
 summary: Your recovery, sleep and activity from a wearable like WHOOP, each in one plain sentence, with every day as a square like a GitHub graph.
 tags: [data]
 license: GPL-3.0-only

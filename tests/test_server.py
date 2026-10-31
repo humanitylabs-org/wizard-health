@@ -305,15 +305,25 @@ class ViewTest(unittest.TestCase):
         html = (self.web / 'index.html').read_text()
         js = (self.web / 'app.js').read_text()
         css = (self.web / 'styles.css').read_text()
-        # three panels (Recovery, Sleep, Activity), each a question, a focus card and its own graph, cloned from one template
-        for need in ('id="screen"', 'id="panels"', 'id="panel-tpl"', 'class="hl-cells"', 'class="hl-months"', 'class="hl-legend"', 'class="hl-cap"',
+        # three panels (Recovery, Sleep, Activity), each a title, a coloured summary card and its own graph, cloned from one template
+        for need in ('id="screen"', 'id="panels"', 'id="panel-tpl"', 'class="hl-cells"', 'class="hl-months"', 'class="hl-legend"',
                      'id="metric"', 'id="dock"', 'data-m="recovery"', 'data-m="sleep"', 'data-m="activity"',
-                     'class="hl-focus"', 'class="fnum"', 'fchip', 'class="hl-say fsay"', 'fmore', 'fbar', 'id="today"', 'ftoday', 'id="srcdot"',
-                     'id="connect"', 'class="hl-tip"', '>Mon<', '>Wed<', '>Fri<'):
+                     'class="hl-focus"', 'class="fnum"', 'fchip', 'class="hl-say fsay"', 'fkv', 'fstages', 'id="today"', 'id="when"', 'id="srcdot"',
+                     'id="connect"', 'class="hl-tip"', '>Mon<', '>Wed<', '>Fri<', '>Back to today<'):
             self.assertIn(need, html)
         self.assertEqual(html.count('class="hl-panel"'), 3)
         tpl = html[html.index('id="panel-tpl"'):]
-        self.assertLess(tpl.index('hl-ask'), tpl.index('hl-focus'))
+        self.assertLess(tpl.index('hl-title'), tpl.index('hl-focus'))
+        # 0.8: no Why?/More sheet, no captions, no repeated day/Today inside the cards; the day shows once, only for a past day
+        for gone in ('fmore', 'ftoday', 'fday', 'hl-cap', 'hl-ask', 'fbar', 'fscale', 'falso'):
+            self.assertNotIn(gone, html + js, gone)
+        for gone in ('openAbout', 'Why?', "'More'", 'Last 30 days'):
+            self.assertNotIn(gone, js, gone)
+        self.assertIn("el('when').hidden = !sel", js)
+        # the card wears its day's square class: same variable, so card fill == square fill
+        self.assertIn("SCALE[m].cls(d)", js)
+        self.assertRegex(css, r'\.hl-focus \{[^}]*background: var\(--c, var\(--cell0\)\)')
+        self.assertIn('.hl-focus[data-on="canvas"]', css)
         self.assertLess(tpl.index('hl-focus'), tpl.index('hl-graph'))
         self.assertLess(tpl.index('hl-cells'), tpl.index('hl-legend'))
         self.assertNotRegex(tpl[:tpl.index('</template>')], r'\sid="')          # cloned three times: no ids inside
@@ -338,11 +348,10 @@ class ViewTest(unittest.TestCase):
         self.assertIn('src="words.js"', html)
         self.assertLess(html.index('src="words.js"'), html.index('src="app.js"'))
         for word in ("'Ready'", "'So-so'", "'Run down'", "'High'", "'Light'", "'Moderate'", "'All out'", "'Enough'", "'A bit short'", "'Short'",
-                     'needed', 'less than your body needed', 'partly recovered', "hasn't recovered", 'well recovered', "didn't push hard",
-                     'Why?', "'More'", 'Back to today', 'usual', 'Resting heart rate', 'Blood oxygen', 'Skin temperature', 'Calories',
-                     'Heart rate variability (HRV)', 'Higher usually means more recovered', 'Lower is usually better',
-                     "'Less sleep', 'More sleep'", "'Easier', 'Harder'", "'Run down', 'Ready'", 'Green = ready, yellow = so-so, red = run down',
-                     "(dark ? 'Brighter' : 'Darker') + ' = more sleep.'", "(dark ? 'Brighter' : 'Darker') + ' = harder day.'", 'data-color-scheme', 'out of ', '0 = resting all day', 'ask1', 'falso', 'fscale'):
+                     'needed', 'less than you needed', 'Partly recovered', 'Not recovered', 'Well recovered', 'A light day',
+                     'Back to today', 'usual', 'Resting heart rate', 'Blood oxygen', 'Skin temperature', 'Calories', 'Steps', 'Workouts',
+                     'Heart rate variability', 'higher = more recovered', 'lower is better', 'Time in bed', 'Dreaming (REM)', 'Deep',
+                     "'Less sleep', 'More sleep'", "'Easier', 'Harder'", "'Run down', 'Ready'", 'Read from your heart overnight, not just your sleep.'):
             self.assertIn(word, js + html + words, word)
         self.assertIn('v >= 67', words); self.assertIn('v >= 34', words)
         self.assertIn('v >= 18', words); self.assertIn('v >= 14', words); self.assertIn('v >= 10', words)
@@ -407,12 +416,25 @@ class WordsTest(unittest.TestCase):
         code = f"const W = require({json.dumps(str(self.words))}); process.stdout.write(JSON.stringify({expr}));"
         return json.loads(subprocess.run([node, '-e', code], check=True, capture_output=True, text=True).stdout)
 
-    def test_questions(self):
-        self.assertEqual(self.run_js("W.ask('recovery', false)"),
-                         {'q': 'How ready is your body today?', 'sub': 'Measured from your heart overnight, not just your sleep.'})
-        self.assertEqual(self.run_js("W.ask('sleep', false)"), {'q': 'Did you sleep enough last night?', 'sub': ''})
-        self.assertEqual(self.run_js("W.ask('activity', false)"), {'q': 'How hard did you push your body today?', 'sub': ''})
-        self.assertEqual(self.run_js("W.ask('recovery', true).q"), 'How ready was your body that day?')
+    def test_titles(self):
+        # the title says what each metric is; exactly one line (Recovery's) explains recovery vs sleep
+        self.assertEqual(self.run_js("W.title('recovery')"),
+                         {'name': 'Recovery', 'gloss': 'how ready your body is', 'sub': 'Read from your heart overnight, not just your sleep.'})
+        self.assertEqual(self.run_js("W.title('sleep').sub"), '')
+        self.assertEqual(self.run_js("W.title('activity').sub"), '')
+
+    def test_summaries(self):
+        self.assertEqual(self.run_js("W.REC_SAY.now.md"), 'Partly recovered. A normal day is fine.')
+        self.assertEqual(self.run_js("W.sleepSay(308, 571)"), '4h 23m less than you needed.')
+        self.assertEqual(self.run_js("W.sleepSay(40, 70)"), '30m less than you needed.')
+        self.assertEqual(self.run_js("W.sleepSay(500, 480)"), 'All the sleep you needed.')
+        for say in self.run_js("[...Object.values(W.REC_SAY.now), ...Object.values(W.REC_SAY.past), ...Object.values(W.ACT_SAY)]"):
+            self.assertLessEqual(len(say), 45, say)
+
+    def test_contrast(self):
+        self.assertAlmostEqual(self.run_js("W.contrast([0,0,0],[255,255,255])"), 21, places=3)
+        self.assertEqual(self.run_js("W.betterInk([240,240,240],[20,20,20],[250,250,250])"), 'a')
+        self.assertEqual(self.run_js("W.betterInk([30,30,40],[20,20,20],[250,250,250])"), 'b')
 
     def test_chip_words(self):
         self.assertEqual(self.run_js("[0, 33, 34, 66, 67, 100].map(v => W.REC_WORD[W.recBand(v)])"),
@@ -423,16 +445,17 @@ class WordsTest(unittest.TestCase):
     def test_recovery_vs_sleep(self):
         R = lambda score, h, need, past=False: self.run_js(f"W.recoveryVsSleep({score}, {h}, {need}, {str(past).lower()})")
         # short sleep (under 70% of need), heart held up
-        self.assertEqual(R(80, 5, 9), 'You slept short, but your heart shows you handled it.')
-        self.assertEqual(R(41, 5.13, 9.52), 'You slept short, but your heart shows you held up okay.')   # a real short night
-        self.assertEqual(R(80, 5, 9, True), 'You slept short, but your heart showed you handled it.')
+        self.assertEqual(R(80, 5, 9), 'Short sleep, but your heart handled it.')
+        self.assertEqual(R(41, 5.13, 9.52), 'Short sleep, but your heart held up okay.')   # a real short night
+        self.assertEqual(R(80, 5, 9, True), 'Short sleep, but your heart handled it.')
         # enough sleep, heart says otherwise
         low = R(20, 8.5, 9)
-        self.assertTrue(low.startswith('You slept enough, but something else'), low)
+        self.assertTrue(low.startswith('Enough sleep, so something else'), low)
         self.assertIn('alcohol', low)
         self.assertIn('is weighing on you', low)
         self.assertIn('was weighing on you', R(20, 8.5, 9, True))
         self.assertIn('may be holding you back', R(50, 8.5, 9))
+        self.assertIn('may have held you back', R(50, 8.5, 9, True))
         # sleep and recovery agree, or a value is missing: no extra sentence
         for args in ((20, 5, 9), (80, 8.5, 9), (80, 7, 9), (20, 7, 9), ('null', 5, 9), (80, 'null', 9), (80, 5, 'null')):
             self.assertEqual(R(*args), '', args)

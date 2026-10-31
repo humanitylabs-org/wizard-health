@@ -1,7 +1,7 @@
 'use strict';
-// Health: Recovery, Sleep and Activity for the selected day, each in one plain sentence over its own GitHub-style
-// contribution graph of every day (all three side by side in a wide window, one at a time in a narrow one), read
-// from the box's health-data connectors.
+// Health: Recovery, Sleep and Activity for the selected day. Each is a title, one summary card filled with the same
+// colour as that day's square, its few supporting numbers baked in, and its own GitHub-style contribution graph of every
+// day (all three side by side in a wide window, one at a time in a narrow one), read from the box's health-data connectors.
 // Reads only this app's documented relative API; never talks to a provider and never takes keys.
 const el = id => document.getElementById(id);
 const SVG = 'http://www.w3.org/2000/svg';
@@ -10,6 +10,7 @@ let ST = null, SUM = null, DAYS = [], BY = {}, pollTimer = null;
 let sel = null;            // the selected date (ISO); null = the newest day ("today")
 let METRIC = 'recovery';   // what colours the squares
 let hoverIso = null;
+let OPEN = false;          // narrow windows: the summary card's details are folded until the card is tapped
 
 // ---------- small helpers ----------
 function say(text, kind = '') {
@@ -28,7 +29,7 @@ async function api(path, data) {
 }
 function h(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
 function s(tag, attrs) { const n = document.createElementNS(SVG, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; }
-const { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, REC_SAY, ACT_SAY, ask, recoveryVsSleep } = window.HealthWords;
+const { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, REC_SAY, ACT_SAY, title, sleepSay, recoveryVsSleep, betterInk } = window.HealthWords;
 const DASH = '\u2013';
 const hm = hours => { if (!num(hours)) return DASH; const m = Math.round(hours * 60); return Math.floor(m / 60) + 'h ' + (m % 60) + 'm'; };
 const addDays = (iso, n) => new Date(Date.parse(iso + 'T12:00:00Z') + n * DAY).toISOString().slice(0, 10);
@@ -94,13 +95,13 @@ const hrv = d => (d || {}).hrv_ms;
 const actLevel = v => !num(v) ? 0 : v >= 18 ? 5 : v >= 14 ? 4 : v >= 10 ? 3 : v >= 5 ? 2 : 1;
 const sleepLevel = v => !num(v) ? 0 : v >= 8 ? 5 : v >= 7 ? 4 : v >= 6 ? 3 : v >= 5 ? 2 : 1;
 
-// What each square means for each metric: its class, its tooltip words and the legend.
+// What each square means for each metric: its class (the summary card wears the very same class, so the card is always
+// the colour of the shown day's square), its tooltip words and the legend.
 const SCALE = {
   recovery: {
     name: 'Recovery',
     cls: d => { const b = recBand(recov(d)); return b ? 'c-' + b : ''; },
     tip: d => num(recov(d)) ? 'Recovery ' + Math.round(recov(d)) + '%, ' + REC_WORD[recBand(recov(d))].toLowerCase() : null,
-    cap: () => 'Each square is one day. Green = ready, yellow = so-so, red = run down.',
     ends: ['Run down', 'Ready'],
     keys: [['c-lo', 'Run down, 0\u201333%'], ['c-md', 'So-so, 34\u201366%'], ['c-hi', 'Ready, 67\u2013100%']],
   },
@@ -108,7 +109,6 @@ const SCALE = {
     name: 'Sleep',
     cls: d => { const l = sleepLevel(sleepH(d)); return l ? 'c-g c-' + l : ''; },
     tip: d => num(sleepH(d)) ? 'Sleep ' + hm(sleepH(d)) : null,
-    cap: dark => 'Each square is one night. ' + (dark ? 'Brighter' : 'Darker') + ' = more sleep.',
     ends: ['Less sleep', 'More sleep'],
     keys: [['c-g c-1', 'Under 5 hours'], ['c-g c-2', '5 to 6 hours'], ['c-g c-3', '6 to 7 hours'], ['c-g c-4', '7 to 8 hours'], ['c-g c-5', '8 hours or more']],
   },
@@ -116,34 +116,103 @@ const SCALE = {
     name: 'Activity',
     cls: d => { const l = actLevel(act(d)); return l ? 'c-a c-' + l : ''; },
     tip: d => num(act(d)) ? 'Activity ' + act(d).toFixed(1) + ' out of ' + actMax(d) : null,
-    cap: dark => 'Each square is one day. ' + (dark ? 'Brighter' : 'Darker') + ' = harder day.',
     ends: ['Easier', 'Harder'],
     keys: [['c-a c-1', 'Light, under 5'], ['c-a c-2', 'Light, 5 to 10'], ['c-a c-3', 'Moderate, 10 to 14'], ['c-a c-4', 'High, 14 to 18'], ['c-a c-5', 'All out, 18 or more']],
   },
 };
 
-// ---------- the focus card: one metric, one day, one plain sentence ----------
+// ---------- the summary card: one metric, one day, one short summary, the key numbers ----------
 // A duration in words-light form: 4h 23m, or 40m under an hour.
 const dur = hours => { const m = Math.round(hours * 60); return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm'; };
-// Everything the focus card shows for one metric on one day, generated from the values.
+// Everything the card shows for one metric on one day, generated from the values.
 function focusOf(metric, d, past) {
   if (metric === 'recovery') {
     const r = recov(d), b = recBand(r);
-    if (!b) return { value: DASH, say: 'Not scored yet. Your wearable scores recovery after you wake up.', more: 'Why?' };
-    return { value: Math.round(r) + '%', chip: REC_WORD[b], chipCls: 'c-' + b, say: REC_SAY[past ? 'past' : 'now'][b], more: 'Why?',
-      also: recoveryVsSleep(r, sleepH(d), needH(d), past) };
+    if (!b) return { value: DASH, say: 'Not scored yet. Your wearable scores it after you wake up.' };
+    return { value: Math.round(r) + '%', chip: REC_WORD[b], say: REC_SAY[past ? 'past' : 'now'][b], also: recoveryVsSleep(r, sleepH(d), needH(d), past) };
   }
   if (metric === 'sleep') {
     const sh = sleepH(d), nd = needH(d), b = sleepBand(sh, nd);
-    if (!num(sh)) return { value: DASH, say: 'No sleep recorded for this night.', more: 'More' };
-    if (!b) return { value: hm(sh), say: 'You slept ' + dur(sh) + '.', more: 'More' };
-    const missing = Math.round(nd * 60) - Math.round(sh * 60);
-    return { value: hm(sh), of: 'of ' + hm(nd) + ' needed', chip: SLEEP_WORD[b], chipCls: 'c-' + b, bar: Math.min(1, sh / nd),
-      say: missing > 0 ? 'You slept ' + dur(missing / 60) + ' less than your body needed.' : 'You got all the sleep your body needed.', more: 'More' };
+    if (!num(sh)) return { value: DASH, say: 'No sleep recorded for this night.' };
+    if (!b) return { value: hm(sh), say: 'You slept ' + dur(sh) + '.' };
+    return { value: hm(sh), of: 'of ' + hm(nd) + ' needed', chip: SLEEP_WORD[b], say: sleepSay(Math.round(sh * 60), Math.round(nd * 60)) };
   }
   const a = act(d), w = actWord(a);
-  if (!w) return { value: DASH, say: 'No activity recorded for this day.', more: 'More' };
-  return { value: a.toFixed(1), of: 'out of ' + actMax(d), scale: '0 = resting all day, ' + actMax(d) + ' = all out', chip: w, chipCls: 'c-a c-' + Math.max(2, actLevel(a)), say: ACT_SAY[w], more: 'More' };
+  if (!w) return { value: DASH, say: 'No activity recorded for this day.' };
+  return { value: a.toFixed(1), of: 'of ' + actMax(d), chip: w, say: ACT_SAY[w] };
+}
+// The 30 days before a date, averaged: "your usual".
+function usual(get, iso) { const xs = []; for (let i = 1; i <= 30; i++) xs.push(get(rec4(addDays(iso, -i)))); return mean(xs); }
+function vsUsual(v, u, fmt, close) {
+  if (!num(v) || !num(u)) return '';
+  return Math.abs(v - u) <= close ? 'about usual' : 'usual ' + fmt(u);   // the unit is on the value above
+}
+// The supporting numbers, baked into the card: 2-4 rows of [name, value, short gloss, vs usual, stage swatch].
+function detailsOf(metric, d, iso) {
+  if (metric === 'recovery') {
+    const r = (fn, f, c) => [fn(d), vsUsual(fn(d), usual(fn, iso), f, c)];
+    const [hv, hu] = r(hrv, v => String(Math.round(v)), 3), [rh, ru] = r(x => (x || {}).resting_hr_bpm, v => String(Math.round(v)), 1);
+    const [tv, tu] = r(x => (x || {}).skin_temp_c, v => v.toFixed(1) + '\u00b0', 0.2);
+    return [
+      ['Heart rate variability', num(hv) ? Math.round(hv) + ' ms' : null, 'higher = more recovered', hu],
+      ['Resting heart rate', num(rh) ? Math.round(rh) + ' bpm' : null, 'lower is better', ru],
+      ['Blood oxygen', num(d.spo2_pct) ? d.spo2_pct.toFixed(1) + '%' : null, 'overnight', ''],
+      ['Skin temperature', num(tv) ? tv.toFixed(1) + ' \u00b0C' : null, 'a rise can mean illness', tu],
+    ];
+  }
+  if (metric === 'sleep') {
+    const sl = d.sleep || {};
+    return [
+      ['Deep', num(sl.deep_h) ? dur(sl.deep_h) : null, 'body repair', '', 'deep'],
+      ['Dreaming (REM)', num(sl.rem_h) ? dur(sl.rem_h) : null, 'mind and memory', '', 'rem'],
+      ['Light', num(sl.light_h) ? dur(sl.light_h) : null, '', '', 'light'],
+      ['Time in bed', num(sl.in_bed_h) ? hm(sl.in_bed_h) : null, num(sl.awake_h) && sl.awake_h > 0 ? dur(sl.awake_h) + ' awake' : '', ''],
+    ];
+  }
+  const ws = d.workouts || [];
+  const one = w => (cap(w.sport) || 'Workout') + (num(w.minutes) ? ', ' + w.minutes + '\u00a0min' : '');
+  return [
+    ['Calories', num(d.calories_kcal) ? Math.round(d.calories_kcal).toLocaleString('en-US') + ' kcal' : null, 'burned all day', ''],
+    ['Steps', num(d.steps) ? Math.round(d.steps).toLocaleString('en-US') : null, '', ''],
+    ['Workouts', !Object.keys(d).length ? null : !ws.length ? 'None' : ws.length === 1 ? one(ws[0]) : ws.length + ': ' + ws.map(w => cap(w.sport) || 'Workout').join(', '), '', ''],
+  ];
+}
+function fillRows(dl, list) {
+  dl.replaceChildren();
+  for (const [k, v, gloss, sub, st] of list) {
+    if (v == null || v === '') continue;
+    const r = h('div'), dt = h('dt'), dd = h('dd'), name = h('span');
+    if (st) name.append(h('i', 'st-' + st));
+    name.append(k); dt.append(name);
+    if (gloss) dt.append(h('small', '', gloss));
+    dd.append(h('b', '', v)); if (sub) dd.append(h('small', '', sub));
+    r.append(dt, dd); dl.append(r);
+  }
+  dl.hidden = !dl.children.length;
+}
+// Sleep stages as one thin bar: deep, dreaming, light and awake, in the order the eye reads them.
+function fillStages(bar, sl) {
+  const parts = [['deep', 'Deep', sl.deep_h], ['rem', 'Dreaming', sl.rem_h], ['light', 'Light', sl.light_h], ['awake', 'Awake', sl.awake_h]].filter(p => num(p[2]) && p[2] > 0);
+  bar.replaceChildren();
+  bar.hidden = !parts.length;
+  if (!parts.length) return;
+  for (const [k, , v] of parts) { const i = h('i', 'st-' + k); i.style.flexGrow = String(v); bar.append(i); }
+  bar.setAttribute('aria-label', 'Sleep stages: ' + parts.map(p => p[1] + ' ' + dur(p[2])).join(', '));
+}
+
+// Text on the coloured card: the kit's ink or its canvas colour, whichever contrasts more with this very fill.
+// Colours are normalised through a 1 px canvas (computed colour-mix values come back in several notations).
+const CV = document.createElement('canvas'); CV.width = CV.height = 1;
+const CX = CV.getContext('2d', { willReadFrequently: true });
+function rgba(css) { CX.clearRect(0, 0, 1, 1); CX.fillStyle = css; CX.fillRect(0, 0, 1, 1); return [...CX.getImageData(0, 0, 1, 1).data]; }
+const probe = h('i'); probe.style.cssText = 'position:absolute;width:0;height:0;visibility:hidden';
+document.querySelector('.wz-app').append(probe);
+function cssColor(v) { probe.style.color = v; return getComputedStyle(probe).color; }
+function onTop(c, under) { const a = c[3] / 255; return [0, 1, 2].map(i => Math.round(c[i] * a + under[i] * (1 - a))); }
+function inkFor(card) {
+  const base = rgba(cssColor('var(--canvas)')).slice(0, 3);
+  const fill = onTop(rgba(getComputedStyle(card).backgroundColor), base);
+  return betterInk(fill, rgba(cssColor('var(--ink)')).slice(0, 3), base) === 'a' ? 'ink' : 'canvas';
 }
 
 // ---------- the screen ----------
@@ -183,41 +252,34 @@ function renderEmpty() {
   a.onclick = e => { if (c) openApp(e, c.id, c.app_path); else { e.preventDefault(); openSources(); } };
   el('wait').hidden = !ST.sources.some(live);
 }
-function setChip(c, F) {
-  c.textContent = F.chip || ''; c.className = 'hl-chip' + (F.chipCls ? ' ' + F.chipCls : ''); c.hidden = !F.chip;
-}
 function renderFocus() {
   const iso = shown(); if (!iso) return;
   el('date').textContent = dayName(iso);
-  el('today').hidden = !sel;
+  el('when').hidden = !sel;
   for (const m of METRICS) focusPanel(P[m], iso);
   for (const b of el('metric').children) b.setAttribute('aria-checked', String(b.dataset.m === METRIC));
   for (const m of METRICS) P[m].root.classList.toggle('is-on', m === METRIC);
 }
 function focusPanel(X, iso) {
-  const q = X.q, m = X.m;
-  const F = focusOf(m, rec4(iso) || {}, !!sel);
-  q('fday').textContent = dayName(iso);
-  q('ftoday').hidden = !sel;
+  const q = X.q, m = X.m, d = rec4(iso) || {};
+  const F = focusOf(m, d, !!sel), T = title(m);
+  q('tname').textContent = T.name;
+  q('tgloss').textContent = T.gloss;
+  q('tsub').textContent = T.sub; q('tsub').hidden = !T.sub;
+  // The card wears the shown day's square class: same variable, same colour, never drifting.
+  const card = q('hl-focus');
+  card.className = 'hl-focus ' + (rec4(iso) ? SCALE[m].cls(d) : '');
   q('fnum').textContent = F.value;
   q('fof').textContent = F.of || '';
-  setChip(q('fchip'), F);
-  const bar = q('fbar');
-  bar.hidden = F.bar == null;
-  if (F.bar != null) { bar.className = 'hl-bar fbar ' + (F.chipCls || ''); bar.firstChild.style.width = (F.bar * 100).toFixed(1) + '%'; }
-  q('fscale').textContent = F.scale || '';
-  q('fscale').hidden = !F.scale;
-  q('fsay').textContent = F.say;
-  q('falso').textContent = F.also || '';
-  q('falso').hidden = !F.also;
-  const A = ask(m, !!sel);
-  q('ask1').textContent = A.q;
-  q('ask2').textContent = A.sub;
-  q('ask2').hidden = !A.sub;
-  const more = q('fmore');
-  more.textContent = F.more;
-  more.setAttribute('aria-label', (F.more === 'Why?' ? 'Why? ' : 'More about ') + SCALE[m].name.toLowerCase());
-  q('hl-focus').setAttribute('aria-label', `${SCALE[m].name}, ${dayName(iso)}: ${F.value}${F.of ? ' ' + F.of : ''}${F.chip ? ', ' + F.chip : ''}. ${F.say}${F.also ? ' ' + F.also : ''}`);
+  q('fchip').textContent = F.chip || ''; q('fchip').hidden = !F.chip;
+  q('fsay').textContent = F.say + (F.also ? ' ' + F.also : '');
+  fillStages(q('fstages'), m === 'sleep' ? d.sleep || {} : {});
+  fillRows(q('fkv'), rec4(iso) ? detailsOf(m, d, iso) : []);
+  card.classList.toggle('is-open', OPEN);
+  q('fexp').setAttribute('aria-expanded', String(OPEN));
+  q('fexp').hidden = !rec4(iso);
+  card.dataset.on = inkFor(card);
+  card.setAttribute('aria-label', `${T.name}, ${dayName(iso)}: ${F.value}${F.of ? ' ' + F.of : ''}${F.chip ? ', ' + F.chip : ''}. ${F.say}${F.also ? ' ' + F.also : ''}`);
 }
 
 // ---------- the graphs ----------
@@ -276,9 +338,7 @@ function graphPanel(X, changed) {
   }
   renderLegend(X);
   const scrolls = sizeGraph(X);
-  const cap = S.cap(darkScheme());
-  X.q('hl-cap').textContent = cap;
-  X.graph.setAttribute('aria-label', `${S.name}. ${cap} ${tracked} ${tracked === 1 ? 'day' : 'days'} tracked${scrolls ? ', older weeks to the left' : ''}.`);
+  X.graph.setAttribute('aria-label', `${S.name}, every day: ${tracked} ${tracked === 1 ? 'day' : 'days'} tracked${scrolls ? ', older weeks to the left' : ''}.`);
   if (rebuilt || changed || X.cell !== X.lastCell) scrollToDay(X, on, true);
   X.lastCell = X.cell;
   fitMonths(X);
@@ -291,13 +351,13 @@ function renderLegend(X) {
   box.append(h('span', '', S.ends[1]));
   box.setAttribute('aria-label', S.name + ': ' + S.keys.map(k => k[1]).join(', '));
 }
-// Light skins draw a fuller day darker, dark skins brighter: the caption follows the scheme the shared client sets.
-function darkScheme() {
-  const c = document.documentElement.dataset.colorScheme;
-  return c ? c === 'dark' : !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
-}
-new MutationObserver(() => { if (hasData() && newest()) for (const m of METRICS) P[m].q('hl-cap').textContent = SCALE[m].cap(darkScheme()); })
-  .observe(document.documentElement, { attributes: true, attributeFilter: ['data-color-scheme'] });
+// A live skin or light/dark change repaints the fills: re-pick each card's text colour once the new sheets apply.
+let inkTimer = null;
+function reink() { clearTimeout(inkTimer); const go = () => { if (hasData() && newest()) for (const m of METRICS) P[m].q('hl-focus').dataset.on = inkFor(P[m].q('hl-focus')); };
+  requestAnimationFrame(go); inkTimer = setTimeout(go, 400); setTimeout(go, 1500); }
+new MutationObserver(reink).observe(document.documentElement, { attributes: true });
+new MutationObserver(reink).observe(document.head, { childList: true });
+document.addEventListener('load', e => { if (e.target.tagName === 'LINK') reink(); }, true);
 // Square size from the panel's width (the scroller is as wide as its card, never as wide as its content):
 // every week fits when it can, in squares as big as fit; otherwise whole weeks of thumb-sized squares (22 px or more
 // in a narrow window) fill the view and older weeks scroll sideways.
@@ -377,6 +437,7 @@ function pick(iso) {
   sel = iso === n ? null : iso;
   renderFocus(); renderGraph();
 }
+function setOpen(v) { OPEN = !!v; for (const m of METRICS) { const c = P[m].q('hl-focus'); c.classList.toggle('is-open', OPEN); P[m].q('fexp').setAttribute('aria-expanded', String(OPEN)); c.dataset.on = inkFor(c); } }
 // Switching metric (narrow windows) keeps the selected day.
 function setMetric(m) {
   if (!SCALE[m] || m === METRIC) return;
@@ -386,7 +447,7 @@ function setMetric(m) {
   if (!wide()) el('main').scrollTop = 0;
 }
 
-// ---------- the detail sheet (one dialog, WzSheet closes it five ways) ----------
+// ---------- the sources sheet (the one dialog, WzSheet closes it five ways) ----------
 function openSheet(title, nodes, kind = '') {
   const d = el('sheet');
   d.className = 'wz-sheet hl-sheet' + (kind ? ' hl-sheet-' + kind : '');
@@ -394,126 +455,6 @@ function openSheet(title, nodes, kind = '') {
   const h2 = h('h2', '', title); h2.id = 'sheet-h';
   body.replaceChildren(h2, ...nodes);
   if (window.WzSheet) WzSheet.open(d); else d.showModal();
-}
-const ABOUT = {
-  recovery: { title: 'Recovery', text: 'How ready your body is. Your wearable reads your heart while you sleep, so this can differ from how long you slept.',
-    get: recov, show: v => Math.round(v) + '%', lo: 0, hi: 100,
-    note: 'Ready is 67% and up, So-so 34\u201366%, Run down 33% and under.' },
-  sleep: { title: 'Sleep', text: 'Time actually asleep, next to the sleep your body needed that night.',
-    get: sleepH, show: hm, lo: 0 },
-  activity: { title: 'Activity', text: 'How hard your heart worked all day, workouts and everyday moving together. 0 = resting all day, 21 = all out.',
-    get: act, show: v => v.toFixed(1), lo: 0, hi: d => actMax(d),
-    note: 'Light under 10, Moderate 10\u201314, High 14\u201318, All out 18 and up.' },
-};
-// The 30 days before a date, averaged: "your usual".
-function usual(get, iso) { const xs = []; for (let i = 1; i <= 30; i++) xs.push(get(rec4(addDays(iso, -i)))); return mean(xs); }
-function vsUsual(v, u, fmt, close) {
-  if (!num(v) || !num(u)) return '';
-  // Short enough to sit beside the row's gloss on a phone; the two numbers show above/below by themselves.
-  return (Math.abs(v - u) <= close ? 'about usual, ' : 'usual ') + fmt(u);
-}
-function rows(list) {
-  const dl = h('dl', 'hl-kv');
-  for (const [k, v, sub, gloss] of list) {
-    if (v == null || v === '') continue;
-    const r = h('div'), dt = h('dt');
-    dt.append(h('span', '', k));
-    if (gloss) dt.append(h('small', '', gloss));
-    r.append(dt);
-    const dd = h('dd'); dd.append(h('b', '', v)); if (sub) dd.append(h('small', '', sub)); r.append(dd); dl.append(r);
-  }
-  return dl.children.length ? dl : null;
-}
-// Sleep stages as one bar: deep, REM, light and awake, in the order the eye reads them.
-function stages(sl) {
-  const parts = [['deep', 'Deep', sl.deep_h], ['rem', 'Dreaming', sl.rem_h], ['light', 'Light', sl.light_h], ['awake', 'Awake', sl.awake_h]].filter(p => num(p[2]) && p[2] > 0);
-  const total = parts.reduce((t, p) => t + p[2], 0);
-  if (!total) return null;
-  const box = h('div', 'hl-stages');
-  const bar = h('div', 'hl-stbar'); bar.setAttribute('role', 'img');
-  bar.setAttribute('aria-label', 'Sleep stages: ' + parts.map(p => p[1] + ' ' + dur(p[2])).join(', '));
-  const key = h('ul', 'hl-stkey');
-  for (const [k, name, v] of parts) {
-    const i = h('i', 'st-' + k); i.style.flexGrow = String(v); bar.append(i);
-    const li = h('li'); li.append(h('i', 'st-' + k), h('span', '', name), h('b', '', dur(v))); key.append(li);
-  }
-  box.append(bar, key);
-  return box;
-}
-function openAbout(k) {
-  const A = ABOUT[k], iso = shown(), d = rec4(iso) || {}, F = focusOf(k, d, !!sel);
-  const now = h('div', 'hl-now');
-  now.append(h('b', '', F.value));
-  if (F.of) now.append(h('small', '', F.of));
-  if (F.chip) { const c = h('span'); setChip(c, F); now.append(c); }
-  const nodes = [h('p', 'hl-when', dayName(iso)), now, h('p', 'hl-about', A.text)];
-  if (k === 'recovery') {
-    const r = (fn, f, c) => [fn(d), vsUsual(fn(d), usual(fn, iso), f, c)];
-    const [hv, hu] = r(hrv, v => Math.round(v) + ' ms', 3), [rh, ru] = r(x => (x || {}).resting_hr_bpm, v => Math.round(v) + ' bpm', 1);
-    const tc = x => (x || {}).skin_temp_c, [tv, tu] = r(tc, v => v.toFixed(1) + ' \u00b0C', 0.2);
-    nodes.push(rows([
-      ['Heart rate variability (HRV)', num(hv) ? Math.round(hv) + ' ms' : null, hu, 'Higher usually means more recovered'],
-      ['Resting heart rate', num(rh) ? Math.round(rh) + ' bpm' : null, ru, 'Lower is usually better'],
-      ['Blood oxygen', num(d.spo2_pct) ? d.spo2_pct.toFixed(1) + '%' : null, '', 'Oxygen in your blood overnight'],
-      ['Skin temperature', num(tv) ? tv.toFixed(1) + ' \u00b0C' : null, tu, 'A rise can be an early sign of illness'],
-    ]));
-  }
-  if (k === 'sleep') {
-    const sl = d.sleep || {};
-    nodes.push(stages(sl), rows([
-      ['Time in bed', num(sl.in_bed_h) ? hm(sl.in_bed_h) : null, '', 'From lying down to getting up'],
-      ['Sleep vs need', num(sl.score) ? Math.round(sl.score) + '%' : null, '', 'How much of the sleep you needed you got'],
-      ['Asleep while in bed', num(sl.efficiency_pct) ? Math.round(sl.efficiency_pct) + '%' : null, '', 'Higher means less tossing and turning'],
-    ]));
-  }
-  if (k === 'activity') {
-    nodes.push(rows([
-      ['Calories', num(d.calories_kcal) ? Math.round(d.calories_kcal).toLocaleString('en-US') + ' kcal' : null, '', 'Energy your body burned all day'],
-      ['Steps', num(d.steps) ? Math.round(d.steps).toLocaleString('en-US') : null, '', 'Counted by your wearable'],
-      ['Average heart rate', num(d.avg_hr_bpm) ? Math.round(d.avg_hr_bpm) + ' bpm' : null, '', 'Across the whole day'],
-    ]));
-    if ((d.workouts || []).length) {
-      const ul = h('ul', 'hl-work');
-      for (const w of d.workouts) {
-        const li = h('li');
-        li.append(h('b', '', cap(w.sport) || 'Workout'), h('span', '', [num(w.minutes) ? w.minutes + ' min' : '', num(w.calories_kcal) ? Math.round(w.calories_kcal) + ' kcal' : '', num((w.load || {}).value) ? 'effort ' + w.load.value.toFixed(1) + ' of ' + (w.load.max || actMax(d)) : ''].filter(Boolean).join(' \u00b7 ')));
-        ul.append(li);
-      }
-      nodes.push(ul);
-    } else nodes.push(h('p', 'hl-note', 'No workouts this day.'));
-  }
-  nodes.push(chart(A, iso));
-  if (A.note) nodes.push(h('p', 'hl-note', A.note));
-  openSheet(A.title, nodes.filter(Boolean), 'about');
-}
-// A plain 30-day line ending on the shown day, with the average as a dashed line.
-function chart(A, endIso) {
-  const W = 320, H = 120, L = 6, R = 6, T = 10, B = 22, n = 30;
-  const pts = [];
-  for (let i = n - 1; i >= 0; i--) { const iso = addDays(endIso, -i); const v = A.get(rec4(iso)); pts.push({ iso, v }); }
-  const vals = pts.map(p => p.v).filter(num);
-  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, class: 'hl-chart', role: 'img', 'aria-label': `Last 30 days of ${A.title}` });
-  if (!vals.length) return h('p', 'hl-key', 'No data in the last 30 days.');
-  let lo = A.lo != null ? A.lo : Math.min(...vals), hi = typeof A.hi === 'function' ? A.hi(rec4(endIso)) : A.hi != null ? A.hi : Math.max(...vals);
-  if (A.lo == null) { const pad = (hi - lo) * 0.2 || 4; lo -= pad; hi += pad; } else if (A.hi == null) hi *= 1.12;
-  if (hi === lo) hi = lo + 1;
-  const x = i => L + i * (W - L - R) / (n - 1);
-  const y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
-  const avg = mean(vals);
-  svg.append(s('line', { x1: L, x2: W - R, y1: H - B, y2: H - B, class: 'hl-axis' }));
-  if (num(avg)) svg.append(s('line', { x1: L, x2: W - R, y1: y(avg).toFixed(1), y2: y(avg).toFixed(1), class: 'hl-avg' }));
-  let d = '';
-  pts.forEach((p, i) => { if (num(p.v)) d += (d ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.v).toFixed(1); });
-  svg.append(s('path', { d, class: 'hl-line' }));
-  const lp = pts[n - 1];
-  if (num(lp.v)) svg.append(s('circle', { cx: x(n - 1).toFixed(1), cy: y(lp.v).toFixed(1), r: 4, class: 'hl-dot' }));
-  const t1 = s('text', { x: L, y: H - 6, class: 'hl-tx' }); t1.textContent = short(pts[0].iso);
-  const t2 = s('text', { x: W - R, y: H - 6, class: 'hl-tx', 'text-anchor': 'end' }); t2.textContent = short(endIso);
-  svg.append(t1, t2);
-  const box = h('div', 'hl-chartbox');
-  box.append(h('p', 'hl-ch', 'Last 30 days'), svg);
-  if (num(avg)) box.append(h('p', 'hl-key', 'Dashed line: your average, ' + A.show(avg) + '.'));
-  return box;
 }
 function openSources() {
   const nodes = [];
@@ -573,8 +514,8 @@ const toToday = () => { hoverIso = null; pick(newest()); scrollAll(newest()); };
 el('today').onclick = toToday;
 for (const m of METRICS) {
   const X = P[m];
-  X.q('fmore').onclick = () => openAbout(m);
-  X.q('ftoday').onclick = toToday;
+  // Narrow windows: one tap on the card unfolds its details in place (no sheet); wide windows always show them.
+  X.q('hl-focus').addEventListener('click', () => { if (!wide() && rec4(shown())) setOpen(!OPEN); });
   X.cells.addEventListener('click', e => { const b = e.target.closest('button[data-d]'); if (b) { hoverIso = null; pick(b.dataset.d); } });
   X.cells.addEventListener('pointerover', e => {
     if (e.pointerType !== 'mouse') return;
@@ -630,17 +571,20 @@ async function refresh() {
 }
 function poll() { clearTimeout(pollTimer); pollTimer = setTimeout(async () => { await refresh(); poll(); }, hasData() ? 60000 : 5000); }
 
-// Domain Back: an open sheet closes first (WzSheet), then a past day returns to today, which is the root.
-function canBack() { return hasData() && !!sel; }
+// Domain Back: an open sheet closes first (WzSheet), then an unfolded card folds (narrow windows), then a past day
+// returns to today, which is the root (the app stays).
+const folds = () => OPEN && !wide();
+function canBack() { return hasData() && (folds() || !!sel); }
 function goBack() {
   if (!canBack()) return false;
+  if (folds()) { setOpen(false); return true; }
   toToday(); return true;
 }
 (function start() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.7.0' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.8.0' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();

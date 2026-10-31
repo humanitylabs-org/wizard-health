@@ -30,14 +30,13 @@
       </section>
 
       <section id="screen" class="hl-screen" hidden>
-        <!-- Wide windows: the shown day (and Today) once for all three; narrow windows show it in the card.
-             The sources dot sits in the top corner either way; its sheet lists the sources. -->
+        <!-- The day shows only when a past day is picked, with one way back to today. The sources dot sits in the corner. -->
         <header class="hl-top">
-          <div class="hl-when-row"><h1 class="hl-day" id="date"></h1><button type="button" class="hl-today" id="today" aria-label="Back to today" hidden>Today</button></div>
+          <div class="hl-when-row" id="when" hidden><span class="hl-day" id="date"></span><button type="button" class="hl-today" id="today">Back to today</button></div>
           <button type="button" class="hl-srcdot" id="srcdot" aria-label="Sources"><i></i></button>
         </header>
         <!-- Recovery, Sleep and Activity: all three side by side in a wide window, one at a time (picked in the bottom bar) in a
-             narrow one. Each is a plain question, one focus card for the shown day and its own GitHub-style graph. -->
+             narrow one. Each reads: title, a summary card coloured like the shown day's square, the graph, a tiny legend. -->
         <div class="hl-panels" id="panels">
           <article class="hl-panel" data-m="recovery" aria-label="Recovery"></article>
           <article class="hl-panel" data-m="sleep" aria-label="Sleep"></article>
@@ -55,28 +54,19 @@
     </nav>
     <p id="status" class="wz-status wz-sr" role="status" aria-live="polite"></p>
   </div>
-  <!-- One metric: the plain question, the focus card for the shown day, then every day as a square (weeks are columns,
-       Sunday to Saturday rows). Cloned into each panel above; ids are not used inside it. -->
+  <!-- One metric: its title, the summary card for the shown day (filled with that day's square colour, the details
+       baked in), then every day as a square (weeks are columns, Sunday to Saturday rows). Cloned into each panel above;
+       ids are not used inside it. -->
   <template id="panel-tpl">
-    <p class="hl-ask"><span class="ask1"></span><small class="ask2" hidden></small></p>
+    <h2 class="hl-title"><span class="tname"></span> <span class="tgloss"></span><small class="tsub" hidden></small></h2>
     <section class="hl-focus" aria-live="polite">
-      <div class="hl-fhead">
-        <h2 class="hl-day fday"></h2>
-        <button type="button" class="hl-today ftoday" aria-label="Back to today" hidden>Today</button>
-      </div>
-      <div class="hl-fmain">
-        <div class="hl-fval"><b class="fnum"></b><small class="fof"></small><span class="hl-chip fchip" hidden></span></div>
-        <div class="hl-bar fbar" hidden><i></i></div>
-        <p class="hl-scale fscale" hidden></p>
-      </div>
-      <div class="hl-fside">
-        <p class="hl-say fsay"></p>
-        <p class="hl-also falso" hidden></p>
-        <button type="button" class="hl-more fmore">Why?</button>
-      </div>
+      <div class="hl-fval"><b class="fnum"></b><small class="fof"></small><span class="hl-chip fchip" hidden></span></div>
+      <p class="hl-say fsay"></p>
+      <div class="hl-stbar fstages" role="img" hidden></div>
+      <dl class="hl-kv fkv"></dl>
+      <button type="button" class="hl-expand fexp" aria-expanded="false">Details</button>
     </section>
     <section class="hl-graph" aria-label="Every day">
-      <p class="hl-cap"></p>
       <div class="hl-gwrap">
         <div class="hl-wd" aria-hidden="true"><span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span></div>
         <div class="hl-gscroll">
@@ -93,6 +83,7 @@
       <div class="hl-tip" role="status" hidden></div>
     </section>
   </template>
+  <!-- The one pop-up: the sources list behind the corner dot -->
   <dialog class="wz-sheet hl-sheet" id="sheet" aria-labelledby="sheet-h"><div id="sheet-body"></div></dialog>
 </body>
 </html>

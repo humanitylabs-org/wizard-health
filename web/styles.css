@@ -4,7 +4,8 @@
 /* Colours. Sheets sit outside .wz-app in the DOM, so they get the same roles.
  * Built from the kit's own success/warning/danger roles; never from --danger alone, which some
  * monochrome skins draw near-black. Red turns the kit's pink-red danger toward its deep amber (hue mix in oklch) so it reads as red.
- * Sleep is one green and Activity one blue, each in five steps from faint to full, as on GitHub. */
+ * Sleep is one green and Activity one blue, each in five steps from faint to full, as on GitHub. The summary cards wear
+ * the same classes, so a card is always filled with its day's square colour. */
 .wz-app, .wz-sheet {
   --hi: var(--wz-success, var(--accent));
   --md: color-mix(in oklab, var(--wz-warning, var(--accent)) 86%, var(--wz-success, var(--accent)));
@@ -12,6 +13,9 @@
   --grn: var(--hi);
   --acc: var(--accent);
   --cell0: color-mix(in srgb, var(--ink) 10%, transparent);
+  /* the low end of the steps is solid (ink faintly over the skin's base), so a step drawn as a card fill is exactly the
+   * colour of its square and text contrast on it is measurable */
+  --cellbase: color-mix(in srgb, var(--ink) 10%, var(--canvas));
   --cell-edge: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 html[data-color-scheme="light"] .wz-app, html[data-color-scheme="light"] .wz-sheet {
@@ -19,17 +23,22 @@ html[data-color-scheme="light"] .wz-app, html[data-color-scheme="light"] .wz-she
   --md: color-mix(in oklab, var(--wz-warning, var(--accent)) 74%, var(--wz-warning-light, var(--accent)));
   --lo: color-mix(in oklch, var(--wz-danger, var(--accent)) 56%, var(--wz-warning-light, var(--accent)));
   --cell0: color-mix(in srgb, var(--ink) 8%, transparent);
+  --cellbase: color-mix(in srgb, var(--ink) 8%, var(--canvas));
 }
 .c-hi { --c: var(--hi); } .c-md { --c: var(--md); } .c-lo { --c: var(--lo); }
 .c-g { --hue: var(--grn); } .c-a { --hue: var(--blu); }
 /* Activity blue: the long way round the hue circle from this scheme's green to its red (WHOOP draws strain blue), so it
  * follows light/dark and never turns grey in monochrome skins whose accent is ink. */
 .wz-app, .wz-sheet { --blu: color-mix(in oklch longer hue, var(--hi) 50%, var(--lo)); }
-.c-1 { --c: color-mix(in srgb, var(--hue) 28%, var(--cell0)); }
-.c-2 { --c: color-mix(in srgb, var(--hue) 46%, var(--cell0)); }
-.c-3 { --c: color-mix(in srgb, var(--hue) 64%, var(--cell0)); }
-.c-4 { --c: color-mix(in srgb, var(--hue) 82%, var(--cell0)); }
+.c-1 { --c: color-mix(in srgb, var(--hue) 28%, var(--cellbase)); }
+.c-2 { --c: color-mix(in srgb, var(--hue) 46%, var(--cellbase)); }
+.c-3 { --c: color-mix(in srgb, var(--hue) 64%, var(--cellbase)); }
+.c-4 { --c: color-mix(in srgb, var(--hue) 82%, var(--cellbase)); }
 .c-5 { --c: var(--hue); }
+/* Light skins: the fullest green and blue sit a touch deeper (toward the ink), as GitHub's darkest square does, so the
+ * skin's paper colour reads on a card filled with them (4.5:1 or better). */
+html[data-color-scheme="light"] .c-hi { --c: color-mix(in oklab, var(--hi) 86%, var(--ink)); }
+html[data-color-scheme="light"] .c-5 { --c: color-mix(in oklab, var(--hue) 86%, var(--ink)); }
 
 .hl-app { height: 100%; }
 /* Bottom clearance. In a phone window the shell ends the frame above its dock, so the safe area is enough. In full screen
@@ -52,14 +61,16 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-wait { width: 8px; height: 8px; border-radius: 50%; background: var(--hi); animation: hl-pulse 1.4s ease-in-out infinite; }
 @keyframes hl-pulse { 50% { opacity: .25; } }
 
-/* ---------- one screen: Recovery, Sleep and Activity, each a question, a focus card and its graph ---------- */
-.hl-screen { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 4px; }
-.hl-panel { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; min-width: 0; }
+/* ---------- one screen: Recovery, Sleep and Activity, each a title, a coloured summary card and its graph ---------- */
+.hl-screen { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding-top: 4px; }
+.hl-panel { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 10px; min-width: 0; }
 
-/* top: the sources dot in the corner; in a wide window also the shown day and Today, once for all three */
+/* top: the sources dot in the corner; the day and Back to today only while a past day is shown */
 .hl-top { display: contents; }
-.hl-when-row { display: none; }
-.hl-srcdot { position: absolute; z-index: 2; top: -6px; right: -12px; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; }
+.hl-when-row { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 40px 0 2px; }
+.hl-day { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-2); }
+.hl-today { min-height: 32px; padding: 0 14px; border: 1px solid var(--line-2, var(--line)); border-radius: var(--r-pill); background: var(--fill-2, var(--fill)); color: var(--ink); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.hl-srcdot { position: absolute; z-index: 2; top: -8px; right: -12px; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; }
 .hl-srcdot i { width: 9px; height: 9px; border-radius: 50%; background: var(--hi); box-shadow: 0 0 0 4px color-mix(in srgb, var(--hi) 18%, transparent); }
 .hl-srcdot.stale i { background: var(--md); box-shadow: 0 0 0 4px color-mix(in srgb, var(--md) 20%, transparent); }
 
@@ -70,35 +81,43 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-seg button { flex: 1; min-height: 44px; padding: 0 12px; border: 0; border-radius: var(--r-pill); background: none; color: var(--ink-2); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .hl-seg button[aria-checked="true"] { background: var(--ink); color: var(--canvas); }
 
-/* the plain question: muted, one short line (Recovery adds a second, smaller one); clear of the corner dot */
-.hl-ask { display: grid; justify-items: center; gap: 2px; margin: 0; padding: 4px 34px 0; text-align: center; font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--ink-2); text-wrap: balance; }
-.hl-ask small { font-size: 12.5px; font-weight: 500; color: var(--ink-3); text-wrap: pretty; }
+/* the title: the metric's name and what it means, on one line; Recovery adds one line on how it differs from sleep */
+.hl-title { margin: 0; padding: 2px 34px 0 2px; font-size: 16px; font-weight: 700; line-height: 1.3; color: var(--ink); text-wrap: balance; }
+.hl-title .tgloss { font-weight: 500; color: var(--ink-2); }
+.hl-title .tgloss::before { content: "\00b7\00a0"; }
+.hl-title small { display: block; margin-top: 2px; font-size: 12.5px; font-weight: 500; color: var(--ink-3); text-wrap: pretty; }
 
-/* the focus card: day, a big number with its chip, one sentence, a quiet Why?/More */
-.hl-focus { display: grid; align-content: start; gap: 8px; padding: 14px 18px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--fill); }
-.hl-fhead { display: flex; align-items: center; gap: 10px; min-height: 26px; }
-.hl-day { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0; color: var(--ink-2); }
-.hl-today { margin-left: auto; min-height: 32px; padding: 0 14px; border: 1px solid var(--line-2, var(--line)); border-radius: var(--r-pill); background: var(--fill-2, var(--fill)); color: var(--ink); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
-.hl-fmain { display: grid; gap: 12px; }
-.hl-fval { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
-.hl-fval b { font-size: 52px; font-weight: 700; letter-spacing: -.035em; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.hl-fval small { align-self: flex-end; margin: 0 2px 6px -2px; font-size: 15px; font-weight: 500; color: var(--ink-3); white-space: nowrap; }
-.hl-fval .hl-chip { height: 30px; font-size: 14px; }
-.hl-bar { height: 6px; border-radius: 3px; background: var(--cell0); overflow: hidden; }
-.hl-bar > i { display: block; height: 100%; border-radius: 3px; background: var(--c, var(--ink-3)); }
-.hl-fside { display: grid; justify-items: start; align-content: start; gap: 0; }
-.hl-say { margin: 2px 0 0; font-size: 16px; line-height: 1.38; color: var(--ink); text-wrap: pretty; }
-.hl-also { margin: 4px 0 0; font-size: 15px; line-height: 1.4; color: var(--ink-2); text-wrap: pretty; }
-.hl-scale { margin: -6px 0 0; font-size: 13px; color: var(--ink-3); }
-.hl-more { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-left: -2px; padding: 0 2px; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.hl-more::after { content: ""; width: 6px; height: 6px; border-top: 1.6px solid currentColor; border-right: 1.6px solid currentColor; transform: rotate(45deg); opacity: .8; }
-@media (hover: hover) { .hl-more:hover { color: var(--ink); } }
-.hl-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px; border-radius: var(--r-pill); border: 1px solid var(--line); font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; }
-.hl-chip::before { content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--c, var(--cell0)); }
+/* the summary card: one solid fill, the very colour of the shown day's square (it wears the square's class, so --c is
+ * the same variable). Flat: one solid colour, no border or glow. Its text is the kit's ink or canvas colour, whichever contrasts
+ * more with the fill (picked in app.js), and everything inside uses that one colour. */
+.hl-focus { display: grid; align-content: start; gap: 8px; padding: 14px 16px 12px; border-radius: var(--r); background: var(--c, var(--cell0)); color: var(--ink); }
+.hl-focus[data-on="canvas"] { color: var(--canvas); }
+.hl-fval { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.hl-fval b { font-size: 48px; font-weight: 750; letter-spacing: -.035em; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hl-fval small { align-self: flex-end; margin: 0 2px 5px -4px; font-size: 14px; font-weight: 600; white-space: nowrap; }
+.hl-chip { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: var(--r-pill); border: 1.5px solid currentColor; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.hl-say { margin: 0; font-size: 15.5px; font-weight: 600; line-height: 1.35; text-wrap: pretty; }
+/* the key numbers: name (with a short gloss under it) and value (with your usual under it) */
+.hl-kv { display: grid; margin: 2px 0 0; }
+.hl-kv > div { display: grid; grid-template-columns: minmax(min-content, 1fr) minmax(0, auto); align-items: baseline; gap: 0 10px; padding: 6px 0; border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent); }
+.hl-kv dt, .hl-kv dd { display: contents; }
+.hl-kv dt span { grid-area: 1 / 1; display: flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; }
+.hl-kv dt small { grid-area: 2 / 1; font-size: 12px; line-height: 1.3; }
+.hl-kv dd b { grid-area: 1 / 2; justify-self: end; font-size: 14px; font-weight: 750; font-variant-numeric: tabular-nums; text-align: right; }
+.hl-kv dd small { grid-area: 2 / 2; justify-self: end; font-size: 12px; white-space: nowrap; }
+.hl-kv dt span i { flex: none; width: 9px; height: 9px; border-radius: 2px; }
+/* the fold toggle: narrow windows only; wide windows always show the details */
+.hl-expand { display: none; }
+/* sleep stages: one thin bar in the card's own text colour, deepest sleep fullest */
+.hl-stbar { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; }
+.hl-stbar > i { display: block; min-width: 3px; }
+.hl-focus .st-deep { background: currentColor; }
+.hl-focus .st-rem { background: color-mix(in srgb, currentColor 64%, transparent); }
+.hl-focus .st-light { background: color-mix(in srgb, currentColor 36%, transparent); }
+.hl-focus .st-awake { background: color-mix(in srgb, currentColor 14%, transparent); }
 
 /* ---------- the graph (GitHub contribution graph) ---------- */
 .hl-graph { position: relative; padding: 14px 12px 12px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--fill); --cell: 22px; --gap: 3px; }
-.hl-cap { margin: 0 0 10px 6px; font-size: 13px; color: var(--ink-2); }
 .hl-gwrap { display: flex; }
 .hl-wd { flex: none; display: grid; grid-auto-rows: var(--cell); row-gap: var(--gap); width: 30px; padding-top: 24px; font-size: 12px; line-height: var(--cell); color: var(--ink-2); }
 .hl-gscroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; scroll-snap-type: x proximity; }
@@ -124,38 +143,34 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* narrow windows (phones, thin desktop windows): the picked metric only; the picker is the bottom bar */
 @container wz-app (max-width: 679.98px) {
   .hl-panel:not(.is-on) { display: none; }
+  /* the card's details fold away so title, card, squares and legend fit one phone screen; one tap on the card unfolds them */
+  .hl-focus { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .hl-focus:not(.is-open) .fkv, .hl-focus:not(.is-open) .fstages { display: none; }
+  .hl-expand { display: inline-flex; align-items: center; gap: 7px; justify-self: start; min-height: 36px; margin: -4px 0 -6px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .hl-expand::after { content: ""; width: 6px; height: 6px; margin-top: -3px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); }
+  .hl-expand[aria-expanded="true"] { font-size: 0; min-height: 28px; justify-self: center; }
+  .hl-expand[aria-expanded="true"]::after { margin-top: 4px; transform: rotate(-135deg); }
   .hl-scroll { padding-bottom: var(--wz-space-4, 16px); }   /* the bottom bar carries the safe-area clearance */
 }
 /* wide windows: all three side by side, no picker. Columns (not stacked rows) so all three fit above the fold even in a
- * tiled desktop window; subgrid lines the questions, cards and graphs up across the columns, and the three graphs share
- * one week span and scroll together. Keep 680 in step with WIDE in app.js. */
+ * tiled desktop window; subgrid lines the titles, cards, squares and legends up across the columns, and the three graphs
+ * share one week span and scroll together. Keep 680 in step with WIDE in app.js. */
 @container wz-app (min-width: 680px) {
   .hl-dock { display: none; }
-  .hl-screen { gap: 10px; padding-top: 6px; }
-  .hl-top { display: flex; align-items: center; gap: 10px; min-height: 40px; }
-  .hl-when-row { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; padding-left: 2px; }
-  .hl-when-row .hl-day { font-size: 17px; font-weight: 650; color: var(--ink); }
-  .hl-when-row .hl-today { margin-left: 0; }
-  .hl-when-row { flex: none; }
-  .hl-srcdot { position: static; margin-left: -6px; }   /* beside the day, clear of the shell's full-screen corner controls */
-  .hl-panels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(5, auto); column-gap: 12px; row-gap: 10px; }
-  /* rows: question, card, then the graph box's caption, squares and legend, each lined up across the three columns */
-  .hl-panel { grid-row: span 5; grid-template-rows: subgrid; gap: 10px; }
-  .hl-graph { grid-row: span 3; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: subgrid; row-gap: 0; align-content: start; }
-  .hl-graph .hl-gwrap { align-self: end; }
-  .hl-fhead { display: none; }
-  .hl-ask { align-self: end; justify-items: start; padding: 0 4px; text-align: left; font-size: 14px; }
-  .hl-ask small { font-size: 12px; }
-  .hl-focus { padding: 14px 14px 6px; }
+  .hl-screen { gap: 8px; padding-top: 6px; }
+  .hl-panels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(4, auto); column-gap: 12px; row-gap: 10px; }
+  /* rows: title, card, then the graph box's squares and legend, each lined up across the three columns */
+  .hl-panel { grid-row: span 4; grid-template-rows: subgrid; gap: 10px; }
+  .hl-graph { grid-row: span 2; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: subgrid; row-gap: 0; align-content: start; }
+  .hl-title { align-self: start; padding-right: 4px; font-size: 15px; }
+  .hl-panel[data-m="activity"] .hl-title { padding-right: 30px; }   /* clear of the sources dot */
+  .hl-focus { padding: 14px 14px 10px; }
   .hl-fval b { font-size: 40px; }
-  .hl-fval small { font-size: 13.5px; margin-bottom: 3px; }
-  .hl-fval .hl-chip { height: 28px; font-size: 13px; }
-  .hl-say { font-size: 15px; line-height: 1.38; }
-  .hl-also { font-size: 13.5px; }
-  .hl-scale { font-size: 12.5px; }
-  .hl-more { min-height: 40px; font-size: 14px; }
+  .hl-fval small { font-size: 13px; margin-bottom: 3px; }
+  .hl-say { font-size: 14.5px; }
+  .hl-kv dt span { font-size: 13px; }
+  .hl-kv dd b { font-size: 13.5px; }
   .hl-graph { padding: 12px 8px 10px 4px; }
-  .hl-cap { margin: 0 0 8px 6px; font-size: 12.5px; }
   .hl-wd { width: 28px; font-size: 11px; }
   .hl-foot { gap: 6px 10px; margin-top: 10px; font-size: 12px; justify-content: flex-start; }
   .hl-foot > span { white-space: nowrap; }
@@ -163,20 +178,28 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .hl-foot .hl-cell { width: 11px; height: 11px; }
   .hl-legend span { margin: 0 2px; }
 }
-/* tiled desktop windows: three slim columns; the legend gets its own line */
+/* tiled desktop windows: three slim columns; the legend gets its own line, glosses tuck under values */
 @container wz-app (min-width: 680px) and (max-width: 959.98px) {
   .hl-foot { font-size: 11.5px; }
   .hl-foot .hl-legend { margin-left: 0; }
   .hl-foot .hl-cell { width: 10px; height: 10px; }
   .hl-legend span { margin: 0 1px; }
-  .hl-fval b { font-size: 36px; }
+  .hl-fval b { font-size: 34px; }
+  .hl-focus { padding: 12px 12px 8px; }
+  .hl-title .tgloss { display: block; font-size: 13px; }
+  .hl-title .tgloss::before { content: none; }
+  .hl-kv dt span { font-size: 12.5px; }
+  .hl-kv dd b { font-size: 13px; }
+  .hl-kv dt small, .hl-kv dd small { font-size: 11.5px; }
+  .hl-kv > div { gap: 0 8px; }
 }
 @container wz-app (min-width: 1100px) {
   .hl-panels { column-gap: 18px; }
-  .hl-ask { font-size: 15px; }
-  .hl-focus { padding: 16px 18px 8px; }
+  .hl-title { font-size: 16px; }
+  .hl-focus { padding: 16px 18px 12px; }
   .hl-fval b { font-size: 48px; }
   .hl-say { font-size: 16px; }
+  .hl-kv dt span, .hl-kv dd b { font-size: 14px; }
   .hl-graph { padding: 14px 12px 12px 8px; }
 }
 
@@ -185,44 +208,6 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 599px) {
   html .wz-sheet.hl-sheet { padding-bottom: calc(var(--wz-space-4, 16px) + 12px + var(--hl-below)); }
 }
-.hl-when { margin: -4px 0 6px; font-size: 13px; font-weight: 600; color: var(--ink-3); }
-.hl-about { margin: 10px 0 14px; font-size: 15px; line-height: 1.45; color: var(--ink-2); }
-.hl-now { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: 0; }
-.hl-now b { font-size: 38px; font-weight: 700; letter-spacing: -.03em; line-height: 1.05; color: var(--ink); font-variant-numeric: tabular-nums; }
-.hl-now small { align-self: flex-end; margin-bottom: 4px; font-size: 14px; color: var(--ink-3); }
-.hl-kv { display: grid; margin: 0 0 14px; border-radius: 14px; background: var(--fill); overflow: hidden; }
-/* each row: name and value on one line; under them the plain gloss (left) and your usual (right) */
-.hl-kv > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 2px 12px; padding: 11px 14px; border-top: 1px solid var(--line); }
-.hl-kv > div:first-child { border-top: 0; }
-.hl-kv dt, .hl-kv dd { display: contents; }
-.hl-kv dt span { grid-area: 1 / 1; font-size: 14px; color: var(--ink-2); }
-.hl-kv dt small { grid-area: 2 / 1; font-size: 12.5px; line-height: 1.35; color: var(--ink-3); }
-.hl-kv dd b { grid-area: 1 / 2; justify-self: end; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.hl-kv dd small { grid-area: 2 / 2; justify-self: end; font-size: 12.5px; color: var(--ink-3); white-space: nowrap; }
-.hl-stages { margin: 0 0 14px; }
-.hl-stbar { display: flex; gap: 2px; height: 14px; border-radius: 7px; overflow: hidden; }
-.hl-stbar > i { display: block; min-width: 4px; }
-.hl-stkey { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 14px; }
-.hl-stkey li { display: flex; align-items: center; gap: 8px; }
-.hl-stkey li i { flex: none; width: 10px; height: 10px; border-radius: 3px; }
-.hl-stkey li span { color: var(--ink-2); }
-.hl-stkey li b { margin-left: auto; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.st-deep { background: var(--grn); }
-.st-rem { background: var(--blu); }
-.st-light { background: color-mix(in srgb, var(--grn) 42%, var(--cell0)); }
-.st-awake { background: color-mix(in srgb, var(--ink) 22%, transparent); }
-.hl-ch { margin: 4px 0 6px; font-size: 13px; font-weight: 600; color: var(--ink-3); }
-.hl-chart { display: block; width: 100%; height: auto; overflow: visible; }
-.hl-line { fill: none; stroke: var(--acc); stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
-.hl-dot { fill: var(--acc); stroke: var(--wz-base, var(--canvas)); stroke-width: 2; }
-.hl-avg { stroke: var(--ink-3); stroke-width: 1.2; stroke-dasharray: 3 4; }
-.hl-axis { stroke: var(--line); stroke-width: 1; }
-.hl-tx { fill: var(--ink-3); font-size: 11px; font-weight: 600; }
-.hl-key { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-3); }
-.hl-note { margin: 12px 0 0; font-size: 13px; line-height: 1.45; color: var(--ink-3); }
-.hl-work { display: grid; gap: 6px; margin: 14px 0 0; padding: 0; list-style: none; }
-.hl-work li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: 12px; background: var(--fill); font-size: 14px; }
-.hl-work span { color: var(--ink-3); font-size: 13px; }
 .hl-srcs { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .hl-src { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; border-radius: 16px; background: var(--fill); }
 .hl-sdot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--hi); }
