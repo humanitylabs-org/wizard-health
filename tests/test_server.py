@@ -251,7 +251,7 @@ class HealthTest(unittest.TestCase):
 
     def test_5_http_and_mcp(self):
         for path in ('/healthz', '/api/status', '/api/summary', '/api/summary?day=2026-10-10', '/api/days', '/api/trends?days=90',
-                     '/api/workouts', '/api/sleep', '/wizard-health/api/status', '/', '/app.js', '/styles.css'):
+                     '/api/workouts', '/api/sleep', '/wizard-health/api/status', '/', '/app.js', '/words.js', '/styles.css'):
             code, body = http(self.port, 'GET', path)
             self.assertEqual(code, 200, path)
         code, body = http(self.port, 'GET', '/api/summary?day=2026-10-10')
@@ -318,13 +318,27 @@ class ViewTest(unittest.TestCase):
             self.assertNotIn(gone, js, gone)
         self.assertFalse((self.web / 'looks.js').exists() or (self.web / 'motion.js').exists())
         # plain words for the bands (WHOOP recovery 0-33/34-66/67-100; strain <10/10-14/14-18/18+; sleep vs need 85%/70%)
-        for word in ("'Low'", "'Medium'", "'High'", "'Light'", "'Moderate'", "'All out'", "'Enough'", "'A bit short'", "'Short'",
+        words = (self.web / 'words.js').read_text()
+        self.assertIn('src="words.js"', html)
+        self.assertLess(html.index('src="words.js"'), html.index('src="app.js"'))
+        for word in ("'Ready'", "'So-so'", "'Run down'", "'High'", "'Light'", "'Moderate'", "'All out'", "'Enough'", "'A bit short'", "'Short'",
                      'needed', 'less than your body needed', 'partly recovered', "hasn't recovered", 'well recovered', "didn't push hard",
-                     'Why?', "'More'", 'Back to today', 'usual', 'Resting heart rate', 'Blood oxygen', 'Skin temperature', 'Calories'):
-            self.assertIn(word, js + html, word)
-        self.assertIn('v >= 67', js); self.assertIn('v >= 34', js)
-        self.assertIn('v >= 18', js); self.assertIn('v >= 14', js); self.assertIn('v >= 10', js)
-        self.assertIn('0.85', js); self.assertIn('0.70', js)
+                     'Why?', "'More'", 'Back to today', 'usual', 'Resting heart rate', 'Blood oxygen', 'Skin temperature', 'Calories',
+                     'Heart rate variability (HRV)', 'Higher usually means more recovered', 'Lower is usually better',
+                     "'Less sleep', 'More sleep'", "'Easier', 'Harder'", "'Run down', 'Ready'", 'Green = ready, yellow = so-so, red = run down',
+                     "(dark ? 'Brighter' : 'Darker') + ' = more sleep.'", "(dark ? 'Brighter' : 'Darker') + ' = harder day.'", 'data-color-scheme', 'out of ', '0 = resting all day', 'id="ask1"', 'id="falso"', 'id="fscale"'):
+            self.assertIn(word, js + html + words, word)
+        self.assertIn('v >= 67', words); self.assertIn('v >= 34', words)
+        self.assertIn('v >= 18', words); self.assertIn('v >= 14', words); self.assertIn('v >= 10', words)
+        self.assertIn('0.85', words); self.assertIn('0.70', words)
+        # no bare jargon on the screen or in sheets: HRV only beside its plain name; no strain/efficiency/performance words
+        code = re.sub(r'(?m)(^|\s)//.*$', '', js + words)   # comments may say what WHOOP calls things
+        shown = re.findall(r"'([^'\\]*(?:\\.[^'\\]*)*)'", code)
+        for t in shown:
+            if 'HRV' in t:
+                self.assertIn('Heart rate variability (HRV)', t)
+            for bad in ('RHR', 'SpO2', 'Strain', 'strain', 'Efficiency', 'efficiency', 'performance', 'Performance', 'alcool', "'Low'", "'Medium'"):
+                self.assertNotIn(bad, t, t)
         # thumb-sized squares on a phone
         self.assertRegex(js, r'narrow \? 22')
         self.assertIn('WizardApp.back.register', js)
@@ -342,6 +356,51 @@ class ViewTest(unittest.TestCase):
         self.assertGreaterEqual(len(bands), 5)
         for v in bands:
             self.assertNotIn('var(--danger)', v)
+
+
+class WordsTest(unittest.TestCase):
+    """The plain words and sentences (web/words.js), run in node exactly as the screen runs them."""
+    words = Path(__file__).resolve().parent.parent / 'web' / 'words.js'
+
+    def run_js(self, expr):
+        import json
+        import shutil as sh
+        import subprocess
+        node = sh.which('node')
+        if not node:
+            self.skipTest('node is not installed')
+        code = f"const W = require({json.dumps(str(self.words))}); process.stdout.write(JSON.stringify({expr}));"
+        return json.loads(subprocess.run([node, '-e', code], check=True, capture_output=True, text=True).stdout)
+
+    def test_questions(self):
+        self.assertEqual(self.run_js("W.ask('recovery', false)"),
+                         {'q': 'How ready is your body today?', 'sub': 'Measured from your heart overnight, not just your sleep.'})
+        self.assertEqual(self.run_js("W.ask('sleep', false)"), {'q': 'Did you sleep enough last night?', 'sub': ''})
+        self.assertEqual(self.run_js("W.ask('activity', false)"), {'q': 'How hard did you push your body today?', 'sub': ''})
+        self.assertEqual(self.run_js("W.ask('recovery', true).q"), 'How ready was your body that day?')
+
+    def test_chip_words(self):
+        self.assertEqual(self.run_js("[0, 33, 34, 66, 67, 100].map(v => W.REC_WORD[W.recBand(v)])"),
+                         ['Run down', 'Run down', 'So-so', 'So-so', 'Ready', 'Ready'])
+        self.assertEqual(self.run_js("[[8.5, 9], [7, 9], [5, 9]].map(([h, n]) => W.SLEEP_WORD[W.sleepBand(h, n)])"),
+                         ['Enough', 'A bit short', 'Short'])
+
+    def test_recovery_vs_sleep(self):
+        R = lambda score, h, need, past=False: self.run_js(f"W.recoveryVsSleep({score}, {h}, {need}, {str(past).lower()})")
+        # short sleep (under 70% of need), heart held up
+        self.assertEqual(R(80, 5, 9), 'You slept short, but your heart shows you handled it.')
+        self.assertEqual(R(41, 5.13, 9.52), 'You slept short, but your heart shows you held up okay.')   # a real short night
+        self.assertEqual(R(80, 5, 9, True), 'You slept short, but your heart showed you handled it.')
+        # enough sleep, heart says otherwise
+        low = R(20, 8.5, 9)
+        self.assertTrue(low.startswith('You slept enough, but something else'), low)
+        self.assertIn('alcohol', low)
+        self.assertIn('is weighing on you', low)
+        self.assertIn('was weighing on you', R(20, 8.5, 9, True))
+        self.assertIn('may be holding you back', R(50, 8.5, 9))
+        # sleep and recovery agree, or a value is missing: no extra sentence
+        for args in ((20, 5, 9), (80, 8.5, 9), (80, 7, 9), (20, 7, 9), ('null', 5, 9), (80, 'null', 9), (80, 5, 'null')):
+            self.assertEqual(R(*args), '', args)
 
 
 if __name__ == '__main__':

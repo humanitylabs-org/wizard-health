@@ -27,7 +27,7 @@ async function api(path, data) {
 }
 function h(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
 function s(tag, attrs) { const n = document.createElementNS(SVG, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; }
-const num = v => typeof v === 'number' && isFinite(v);
+const { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, REC_SAY, ACT_SAY, ask, recoveryVsSleep } = window.HealthWords;
 const DASH = '\u2013';
 const hm = hours => { if (!num(hours)) return DASH; const m = Math.round(hours * 60); return Math.floor(m / 60) + 'h ' + (m % 60) + 'm'; };
 const addDays = (iso, n) => new Date(Date.parse(iso + 'T12:00:00Z') + n * DAY).toISOString().slice(0, 10);
@@ -89,11 +89,7 @@ const needH = d => ((d || {}).sleep || {}).need_h;
 const act = d => ((d || {}).load || {}).value;
 const actMax = d => ((d || {}).load || {}).max || labels().load_max || 21;
 const hrv = d => (d || {}).hrv_ms;
-// WHOOP's recovery bands: 0-33 red, 34-66 yellow, 67-100 green.
-const recBand = v => !num(v) ? null : v >= 67 ? 'hi' : v >= 34 ? 'md' : 'lo';
-const REC_WORD = { hi: 'High', md: 'Medium', lo: 'Low' };
-// WHOOP's strain bands: under 10, 10-14, 14-18, 18 and over.
-const actWord = v => !num(v) ? null : v >= 18 ? 'All out' : v >= 14 ? 'High' : v >= 10 ? 'Moderate' : 'Light';
+// Bands and words live in words.js (Recovery 0-33/34-66/67-100; Activity under 10, 10-14, 14-18, 18 and over).
 const actLevel = v => !num(v) ? 0 : v >= 18 ? 5 : v >= 14 ? 4 : v >= 10 ? 3 : v >= 5 ? 2 : 1;
 const sleepLevel = v => !num(v) ? 0 : v >= 8 ? 5 : v >= 7 ? 4 : v >= 6 ? 3 : v >= 5 ? 2 : 1;
 
@@ -102,20 +98,25 @@ const SCALE = {
   recovery: {
     name: 'Recovery',
     cls: d => { const b = recBand(recov(d)); return b ? 'c-' + b : ''; },
-    tip: d => num(recov(d)) ? 'Recovery ' + Math.round(recov(d)) + '%' : null,
-    legend: [['Low', ['c-lo', 'c-md', 'c-hi'], 'High']],
-    keys: [['c-lo', 'Low, 0\u201333%'], ['c-md', 'Medium, 34\u201366%'], ['c-hi', 'High, 67\u2013100%']],
+    tip: d => num(recov(d)) ? 'Recovery ' + Math.round(recov(d)) + '%, ' + REC_WORD[recBand(recov(d))].toLowerCase() : null,
+    cap: () => 'Each square is one day. Green = ready, yellow = so-so, red = run down.',
+    ends: ['Run down', 'Ready'],
+    keys: [['c-lo', 'Run down, 0\u201333%'], ['c-md', 'So-so, 34\u201366%'], ['c-hi', 'Ready, 67\u2013100%']],
   },
   sleep: {
     name: 'Sleep',
     cls: d => { const l = sleepLevel(sleepH(d)); return l ? 'c-g c-' + l : ''; },
     tip: d => num(sleepH(d)) ? 'Sleep ' + hm(sleepH(d)) : null,
+    cap: dark => 'Each square is one night. ' + (dark ? 'Brighter' : 'Darker') + ' = more sleep.',
+    ends: ['Less sleep', 'More sleep'],
     keys: [['c-g c-1', 'Under 5 hours'], ['c-g c-2', '5 to 6 hours'], ['c-g c-3', '6 to 7 hours'], ['c-g c-4', '7 to 8 hours'], ['c-g c-5', '8 hours or more']],
   },
   activity: {
     name: 'Activity',
     cls: d => { const l = actLevel(act(d)); return l ? 'c-a c-' + l : ''; },
-    tip: d => num(act(d)) ? 'Activity ' + act(d).toFixed(1) : null,
+    tip: d => num(act(d)) ? 'Activity ' + act(d).toFixed(1) + ' out of ' + actMax(d) : null,
+    cap: dark => 'Each square is one day. ' + (dark ? 'Brighter' : 'Darker') + ' = harder day.',
+    ends: ['Easier', 'Harder'],
     keys: [['c-a c-1', 'Light, under 5'], ['c-a c-2', 'Light, 5 to 10'], ['c-a c-3', 'Moderate, 10 to 14'], ['c-a c-4', 'High, 14 to 18'], ['c-a c-5', 'All out, 18 or more']],
   },
 };
@@ -123,25 +124,13 @@ const SCALE = {
 // ---------- the focus card: one metric, one day, one plain sentence ----------
 // A duration in words-light form: 4h 23m, or 40m under an hour.
 const dur = hours => { const m = Math.round(hours * 60); return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm'; };
-// Sleep against need: Enough at 85% or more, A bit short at 70-85%, Short below 70%.
-const sleepBand = (h, need) => !num(h) || !num(need) || need <= 0 ? null : h / need >= 0.85 ? 'hi' : h / need >= 0.70 ? 'md' : 'lo';
-const SLEEP_WORD = { hi: 'Enough', md: 'A bit short', lo: 'Short' };
-const REC_SAY = {
-  now: { hi: 'Your body is well recovered. A good day to push.',
-    md: 'Your body is partly recovered. A normal day is fine; skip anything very hard.',
-    lo: "Your body hasn't recovered. Take it easy today." },
-  past: { hi: 'Your body was well recovered. A good day to push.',
-    md: 'Your body was partly recovered. A normal day was fine; nothing very hard.',
-    lo: "Your body hadn't recovered. A day to take it easy." },
-};
-const ACT_SAY = { 'Light': "A light day. You moved, but didn't push hard.", 'Moderate': 'A moderate day. You put in some real effort.',
-  'High': 'A hard day. Your heart worked a lot.', 'All out': 'An all-out day. Your body will need time to recover.' };
 // Everything the focus card shows for one metric on one day, generated from the values.
 function focusOf(metric, d, past) {
   if (metric === 'recovery') {
     const r = recov(d), b = recBand(r);
     if (!b) return { value: DASH, say: 'Not scored yet. Your wearable scores recovery after you wake up.', more: 'Why?' };
-    return { value: Math.round(r) + '%', chip: REC_WORD[b], chipCls: 'c-' + b, say: REC_SAY[past ? 'past' : 'now'][b], more: 'Why?' };
+    return { value: Math.round(r) + '%', chip: REC_WORD[b], chipCls: 'c-' + b, say: REC_SAY[past ? 'past' : 'now'][b], more: 'Why?',
+      also: recoveryVsSleep(r, sleepH(d), needH(d), past) };
   }
   if (metric === 'sleep') {
     const sh = sleepH(d), nd = needH(d), b = sleepBand(sh, nd);
@@ -153,7 +142,7 @@ function focusOf(metric, d, past) {
   }
   const a = act(d), w = actWord(a);
   if (!w) return { value: DASH, say: 'No activity recorded for this day.', more: 'More' };
-  return { value: a.toFixed(1), of: 'of ' + actMax(d), chip: w, chipCls: 'c-a c-' + Math.max(2, actLevel(a)), say: ACT_SAY[w], more: 'More' };
+  return { value: a.toFixed(1), of: 'out of ' + actMax(d), scale: '0 = resting all day, ' + actMax(d) + ' = all out', chip: w, chipCls: 'c-a c-' + Math.max(2, actLevel(a)), say: ACT_SAY[w], more: 'More' };
 }
 
 // ---------- the screen ----------
@@ -191,12 +180,20 @@ function renderFocus() {
   const bar = el('fbar');
   bar.hidden = F.bar == null;
   if (F.bar != null) { bar.className = 'hl-bar ' + (F.chipCls || ''); bar.firstChild.style.width = (F.bar * 100).toFixed(1) + '%'; }
+  el('fscale').textContent = F.scale || '';
+  el('fscale').hidden = !F.scale;
   el('fsay').textContent = F.say;
+  el('falso').textContent = F.also || '';
+  el('falso').hidden = !F.also;
+  const A = ask(METRIC, !!sel);
+  el('ask1').textContent = A.q;
+  el('ask2').textContent = A.sub;
+  el('ask2').hidden = !A.sub;
   const more = el('fmore');
   more.textContent = F.more;
   more.setAttribute('aria-label', (F.more === 'Why?' ? 'Why? ' : 'More about ') + SCALE[METRIC].name.toLowerCase());
   el('focus').dataset.m = METRIC;
-  el('focus').setAttribute('aria-label', `${SCALE[METRIC].name}, ${dayName(iso)}: ${F.value}${F.of ? ' ' + F.of : ''}${F.chip ? ', ' + F.chip : ''}. ${F.say}`);
+  el('focus').setAttribute('aria-label', `${SCALE[METRIC].name}, ${dayName(iso)}: ${F.value}${F.of ? ' ' + F.of : ''}${F.chip ? ', ' + F.chip : ''}. ${F.say}${F.also ? ' ' + F.also : ''}`);
 }
 
 // ---------- the graph ----------
@@ -245,22 +242,30 @@ function renderGraph() {
   renderLegend();
   for (const b of el('metric').children) b.setAttribute('aria-checked', String(b.dataset.m === METRIC));
   const scrolls = sizeGraph();
-  el('cap').textContent = tracked + (tracked === 1 ? ' day' : ' days') + ' tracked' + (scrolls ? ' \u00b7 older weeks to the left' : '');
+  const cap = S.cap(darkScheme());
+  el('cap').textContent = cap;
+  el('graph').setAttribute('aria-label', `${cap} ${tracked} ${tracked === 1 ? 'day' : 'days'} tracked${scrolls ? ', older weeks to the left' : ''}.`);
   if (rebuilt) scrollToDay(on, true);
   fitMonths();
   showTip();
 }
 function renderLegend() {
   const S = SCALE[METRIC], box = el('legend');
-  box.replaceChildren(h('span', '', 'Less'));
+  box.replaceChildren(h('span', '', S.ends[0]));
   for (const [cls, title] of S.keys) { const i = h('i', 'hl-cell ' + cls); i.title = title; box.append(i); }
-  box.append(h('span', '', 'More'));
-  if (METRIC === 'recovery') { box.firstChild.textContent = 'Low'; box.lastChild.textContent = 'High'; }
+  box.append(h('span', '', S.ends[1]));
   box.setAttribute('aria-label', S.name + ': ' + S.keys.map(k => k[1]).join(', '));
 }
 // Square size from the window's width (the scroller is as wide as its card, never as wide as its content):
 // every week fits when it can, in squares as big as fit; otherwise whole weeks of thumb-sized squares (22 px or more
 // on a narrow window) fill the view and older weeks scroll sideways.
+// Light skins draw a fuller day darker, dark skins brighter: the caption follows the scheme the shared client sets.
+function darkScheme() {
+  const c = document.documentElement.dataset.colorScheme;
+  return c ? c === 'dark' : !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+}
+new MutationObserver(() => { if (hasData() && newest()) el('cap').textContent = SCALE[METRIC].cap(darkScheme()); })
+  .observe(document.documentElement, { attributes: true, attributeFilter: ['data-color-scheme'] });
 const GAP = 3;
 const narrowWin = () => el('main').clientWidth < 600;
 function sizeGraph() {
@@ -344,34 +349,37 @@ function openSheet(title, nodes, kind = '') {
   if (window.WzSheet) WzSheet.open(d); else d.showModal();
 }
 const ABOUT = {
-  recovery: { title: 'Recovery', text: 'How ready your body is, from your heart rate variability, resting heart rate and sleep.',
+  recovery: { title: 'Recovery', text: 'How ready your body is. Your wearable reads your heart while you sleep, so this can differ from how long you slept.',
     get: recov, show: v => Math.round(v) + '%', lo: 0, hi: 100,
-    note: 'High is 67% and up, Medium 34\u201366%, Low 33% and under.' },
+    note: 'Ready is 67% and up, So-so 34\u201366%, Run down 33% and under.' },
   sleep: { title: 'Sleep', text: 'Time actually asleep, next to the sleep your body needed that night.',
     get: sleepH, show: hm, lo: 0 },
-  activity: { title: 'Activity', text: 'How hard your heart worked all day, workouts and everyday moving together.',
+  activity: { title: 'Activity', text: 'How hard your heart worked all day, workouts and everyday moving together. 0 = resting all day, 21 = all out.',
     get: act, show: v => v.toFixed(1), lo: 0, hi: d => actMax(d),
-    note: 'From 0 to 21: Light under 10, Moderate 10\u201314, High 14\u201318, All out 18 and up.' },
+    note: 'Light under 10, Moderate 10\u201314, High 14\u201318, All out 18 and up.' },
 };
 // The 30 days before a date, averaged: "your usual".
 function usual(get, iso) { const xs = []; for (let i = 1; i <= 30; i++) xs.push(get(rec4(addDays(iso, -i)))); return mean(xs); }
 function vsUsual(v, u, fmt, close) {
   if (!num(v) || !num(u)) return '';
-  const word = Math.abs(v - u) <= close ? 'about your usual' : v > u ? 'above your usual' : 'below your usual';
-  return word + ' of ' + fmt(u);
+  // Short enough to sit beside the row's gloss on a phone; the two numbers show above/below by themselves.
+  return (Math.abs(v - u) <= close ? 'about usual, ' : 'usual ') + fmt(u);
 }
 function rows(list) {
   const dl = h('dl', 'hl-kv');
-  for (const [k, v, sub] of list) {
+  for (const [k, v, sub, gloss] of list) {
     if (v == null || v === '') continue;
-    const r = h('div'); r.append(h('dt', '', k));
+    const r = h('div'), dt = h('dt');
+    dt.append(h('span', '', k));
+    if (gloss) dt.append(h('small', '', gloss));
+    r.append(dt);
     const dd = h('dd'); dd.append(h('b', '', v)); if (sub) dd.append(h('small', '', sub)); r.append(dd); dl.append(r);
   }
   return dl.children.length ? dl : null;
 }
 // Sleep stages as one bar: deep, REM, light and awake, in the order the eye reads them.
 function stages(sl) {
-  const parts = [['deep', 'Deep', sl.deep_h], ['rem', 'REM', sl.rem_h], ['light', 'Light', sl.light_h], ['awake', 'Awake', sl.awake_h]].filter(p => num(p[2]) && p[2] > 0);
+  const parts = [['deep', 'Deep', sl.deep_h], ['rem', 'Dreaming', sl.rem_h], ['light', 'Light', sl.light_h], ['awake', 'Awake', sl.awake_h]].filter(p => num(p[2]) && p[2] > 0);
   const total = parts.reduce((t, p) => t + p[2], 0);
   if (!total) return null;
   const box = h('div', 'hl-stages');
@@ -397,31 +405,31 @@ function openAbout(k) {
     const [hv, hu] = r(hrv, v => Math.round(v) + ' ms', 3), [rh, ru] = r(x => (x || {}).resting_hr_bpm, v => Math.round(v) + ' bpm', 1);
     const tc = x => (x || {}).skin_temp_c, [tv, tu] = r(tc, v => v.toFixed(1) + ' \u00b0C', 0.2);
     nodes.push(rows([
-      ['HRV', num(hv) ? Math.round(hv) + ' ms' : null, hu],
-      ['Resting heart rate', num(rh) ? Math.round(rh) + ' bpm' : null, ru],
-      ['Blood oxygen', num(d.spo2_pct) ? d.spo2_pct.toFixed(1) + '%' : null, ''],
-      ['Skin temperature', num(tv) ? tv.toFixed(1) + ' \u00b0C' : null, tu],
+      ['Heart rate variability (HRV)', num(hv) ? Math.round(hv) + ' ms' : null, hu, 'Higher usually means more recovered'],
+      ['Resting heart rate', num(rh) ? Math.round(rh) + ' bpm' : null, ru, 'Lower is usually better'],
+      ['Blood oxygen', num(d.spo2_pct) ? d.spo2_pct.toFixed(1) + '%' : null, '', 'Oxygen in your blood overnight'],
+      ['Skin temperature', num(tv) ? tv.toFixed(1) + ' \u00b0C' : null, tu, 'A rise can be an early sign of illness'],
     ]));
   }
   if (k === 'sleep') {
     const sl = d.sleep || {};
     nodes.push(stages(sl), rows([
-      ['Time in bed', num(sl.in_bed_h) ? hm(sl.in_bed_h) : null, ''],
-      ['Sleep performance', num(sl.score) ? Math.round(sl.score) + '%' : null, ''],
-      ['Efficiency', num(sl.efficiency_pct) ? Math.round(sl.efficiency_pct) + '%' : null, 'time in bed spent asleep'],
+      ['Time in bed', num(sl.in_bed_h) ? hm(sl.in_bed_h) : null, '', 'From lying down to getting up'],
+      ['Sleep vs need', num(sl.score) ? Math.round(sl.score) + '%' : null, '', 'How much of the sleep you needed you got'],
+      ['Asleep while in bed', num(sl.efficiency_pct) ? Math.round(sl.efficiency_pct) + '%' : null, '', 'Higher means less tossing and turning'],
     ]));
   }
   if (k === 'activity') {
     nodes.push(rows([
-      ['Calories', num(d.calories_kcal) ? Math.round(d.calories_kcal).toLocaleString('en-US') + ' kcal' : null, ''],
-      ['Steps', num(d.steps) ? Math.round(d.steps).toLocaleString('en-US') : null, ''],
-      ['Average heart rate', num(d.avg_hr_bpm) ? Math.round(d.avg_hr_bpm) + ' bpm' : null, ''],
+      ['Calories', num(d.calories_kcal) ? Math.round(d.calories_kcal).toLocaleString('en-US') + ' kcal' : null, '', 'Energy your body burned all day'],
+      ['Steps', num(d.steps) ? Math.round(d.steps).toLocaleString('en-US') : null, '', 'Counted by your wearable'],
+      ['Average heart rate', num(d.avg_hr_bpm) ? Math.round(d.avg_hr_bpm) + ' bpm' : null, '', 'Across the whole day'],
     ]));
     if ((d.workouts || []).length) {
       const ul = h('ul', 'hl-work');
       for (const w of d.workouts) {
         const li = h('li');
-        li.append(h('b', '', cap(w.sport) || 'Workout'), h('span', '', [num(w.minutes) ? w.minutes + ' min' : '', num(w.calories_kcal) ? Math.round(w.calories_kcal) + ' kcal' : '', num((w.load || {}).value) ? 'activity ' + w.load.value.toFixed(1) : ''].filter(Boolean).join(' \u00b7 ')));
+        li.append(h('b', '', cap(w.sport) || 'Workout'), h('span', '', [num(w.minutes) ? w.minutes + ' min' : '', num(w.calories_kcal) ? Math.round(w.calories_kcal) + ' kcal' : '', num((w.load || {}).value) ? 'effort ' + w.load.value.toFixed(1) + ' of ' + (w.load.max || actMax(d)) : ''].filter(Boolean).join(' \u00b7 ')));
         ul.append(li);
       }
       nodes.push(ul);
@@ -571,7 +579,7 @@ function goBack() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.5.0' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.6.0' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();

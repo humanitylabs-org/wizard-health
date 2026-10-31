@@ -32,7 +32,15 @@ html[data-color-scheme="light"] .wz-app, html[data-color-scheme="light"] .wz-she
 .c-5 { --c: var(--hue); }
 
 .hl-app { height: 100%; }
-.hl-scroll { position: relative; display: flex; flex-direction: column; padding-bottom: calc(var(--wz-space-4, 16px) + env(safe-area-inset-bottom, 0px)); }
+/* Bottom clearance. In a phone window the shell ends the frame above its dock, so the safe area is enough. In full screen
+ * (html[data-presentation="immersive"], set by the shared client) the frame reaches the bottom of the glass: the
+ * shell's swipe-up strip, the home indicator and, with the orb in the corner, the orb itself sit over the last
+ * lines. The kit exposes no dock-height role, so clear the corner orb (44 px + 9 px gap) and the strip (18 px). */
+.wz-app, .wz-sheet { --hl-below: env(safe-area-inset-bottom, 0px); }
+@media (max-width: 599px) {
+  html[data-presentation="immersive"] .wz-app, html[data-presentation="immersive"] .wz-sheet { --hl-below: calc(max(env(safe-area-inset-bottom, 0px), 18px) + 62px); }
+}
+.hl-scroll { position: relative; display: flex; flex-direction: column; padding-bottom: calc(var(--wz-space-4, 16px) + var(--hl-below)); }
 a.wz-button { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; white-space: nowrap; }
 .hl-sm { min-height: 36px; padding: 0 14px; font-size: 13px; }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -56,6 +64,10 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-srcdot i { width: 9px; height: 9px; border-radius: 50%; background: var(--hi); box-shadow: 0 0 0 4px color-mix(in srgb, var(--hi) 18%, transparent); }
 .hl-srcdot.stale i { background: var(--md); box-shadow: 0 0 0 4px color-mix(in srgb, var(--md) 20%, transparent); }
 
+/* the plain question under the picker: muted, one short line (Recovery adds a second, smaller one) */
+.hl-ask { display: grid; justify-items: center; gap: 2px; margin: -4px 0 -2px; text-align: center; font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--ink-2); text-wrap: balance; }
+.hl-ask small { font-size: 13px; font-weight: 500; color: var(--ink-3); text-wrap: pretty; }
+
 /* the focus card: day, a big number with its chip, one sentence, a quiet Why?/More */
 .hl-focus { display: grid; gap: 10px; padding: 18px 18px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--fill); }
 .hl-fhead { display: flex; align-items: center; gap: 10px; min-height: 32px; }
@@ -70,6 +82,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-bar > i { display: block; height: 100%; border-radius: 3px; background: var(--c, var(--ink-3)); }
 .hl-fside { display: grid; justify-items: start; gap: 0; }
 .hl-say { margin: 2px 0 0; font-size: 17px; line-height: 1.4; color: var(--ink); text-wrap: pretty; }
+.hl-also { margin: 6px 0 0; font-size: 15px; line-height: 1.4; color: var(--ink-2); text-wrap: pretty; }
+.hl-scale { margin: -6px 0 0; font-size: 13px; color: var(--ink-3); }
 .hl-more { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-left: -2px; padding: 0 2px; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .hl-more::after { content: ""; width: 6px; height: 6px; border-top: 1.6px solid currentColor; border-right: 1.6px solid currentColor; transform: rotate(45deg); opacity: .8; }
 @media (hover: hover) { .hl-more:hover { color: var(--ink); } }
@@ -103,8 +117,14 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* phones: generous spacing, the screen grows with its content */
 @container wz-app (max-width: 599px) {
-  .hl-screen { gap: 16px; padding-top: 8px; }
+  .hl-screen { gap: 12px; padding-top: 4px; }
+  .hl-ask small { font-size: 12.5px; }
+  .hl-say { font-size: 16px; line-height: 1.38; }
   .hl-seg button { min-height: 44px; }
+  .hl-ask { margin: -2px 0 0; }
+  .hl-focus { gap: 8px; padding-top: 14px; }
+  .hl-fhead { min-height: 26px; }
+  .hl-also { margin-top: 4px; }
 }
 /* wide windows (and short-wide tiled ones): the picker centred, the card's sentence beside its number */
 @container wz-app (min-width: 700px) {
@@ -126,18 +146,24 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 
 /* ---------- sheets ---------- */
+/* phone sheets: the last row clears the safe area and, in full screen, the shell's corner orb and swipe strip */
+@media (max-width: 599px) {
+  html .wz-sheet.hl-sheet { padding-bottom: calc(var(--wz-space-4, 16px) + 12px + var(--hl-below)); }
+}
 .hl-when { margin: -4px 0 6px; font-size: 13px; font-weight: 600; color: var(--ink-3); }
 .hl-about { margin: 10px 0 14px; font-size: 15px; line-height: 1.45; color: var(--ink-2); }
 .hl-now { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: 0; }
 .hl-now b { font-size: 38px; font-weight: 700; letter-spacing: -.03em; line-height: 1.05; color: var(--ink); font-variant-numeric: tabular-nums; }
 .hl-now small { align-self: flex-end; margin-bottom: 4px; font-size: 14px; color: var(--ink-3); }
 .hl-kv { display: grid; margin: 0 0 14px; border-radius: 14px; background: var(--fill); overflow: hidden; }
-.hl-kv > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 11px 14px; border-top: 1px solid var(--line); }
+/* each row: name and value on one line; under them the plain gloss (left) and your usual (right) */
+.hl-kv > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 2px 12px; padding: 11px 14px; border-top: 1px solid var(--line); }
 .hl-kv > div:first-child { border-top: 0; }
-.hl-kv dt { font-size: 14px; color: var(--ink-2); }
-.hl-kv dd { margin: 0; display: grid; justify-items: end; gap: 1px; text-align: right; }
-.hl-kv dd b { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
-.hl-kv dd small { font-size: 12.5px; color: var(--ink-3); }
+.hl-kv dt, .hl-kv dd { display: contents; }
+.hl-kv dt span { grid-area: 1 / 1; font-size: 14px; color: var(--ink-2); }
+.hl-kv dt small { grid-area: 2 / 1; font-size: 12.5px; line-height: 1.35; color: var(--ink-3); }
+.hl-kv dd b { grid-area: 1 / 2; justify-self: end; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hl-kv dd small { grid-area: 2 / 2; justify-self: end; font-size: 12.5px; color: var(--ink-3); white-space: nowrap; }
 .hl-stages { margin: 0 0 14px; }
 .hl-stbar { display: flex; gap: 2px; height: 14px; border-radius: 7px; overflow: hidden; }
 .hl-stbar > i { display: block; min-width: 4px; }
@@ -145,7 +171,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hl-stkey li { display: flex; align-items: center; gap: 8px; }
 .hl-stkey li i { flex: none; width: 10px; height: 10px; border-radius: 3px; }
 .hl-stkey li span { color: var(--ink-2); }
-.hl-stkey li b { margin-left: auto; font-weight: 650; font-variant-numeric: tabular-nums; }
+.hl-stkey li b { margin-left: auto; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .st-deep { background: var(--grn); }
 .st-rem { background: var(--blu); }
 .st-light { background: color-mix(in srgb, var(--grn) 42%, var(--cell0)); }
