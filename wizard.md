@@ -4,7 +4,7 @@ id: wizard-health
 name: Health
 type: view
 category: app
-version: 0.12.0
+version: 0.13.0
 summary: Your recovery, sleep and activity from your wearables, each in one plain sentence, every day as a square like a GitHub graph.
 tags: [data]
 license: GPL-3.0-only
@@ -47,7 +47,7 @@ A health tracker over the wearables you connect, in plain words, with one traffi
 
 Each gets one card for the selected day, filled with that day's colour: a big number, a word, one plain sentence and the few numbers behind it (heart rate variability, resting heart rate, blood oxygen and skin temperature; sleep stages; the day's target, calories, steps and workouts). Below it, **every day as a square**, like a GitHub contribution graph, with one shared legend. Tap a square to see that day everywhere (Back to today and Back return to today).
 
-In a wide window all three sit side by side and move together. In a narrow window (a phone) you see one at a time and pick Activity, Recovery or Sleep in a bar at the bottom (it opens on Activity, which says how much more to do today), within reach of your thumb; the squares are big enough to tap, about the last three months fit the screen and older weeks scroll sideways.
+In a wide window Activity, the one to act on, fills the top half, and Recovery and Sleep share the bottom half; all three move together. In a narrow window (a phone) you see one at a time and pick Activity, Recovery or Sleep in a bar at the bottom (it opens on Activity, which says how much more to do today), within reach of your thumb; the squares are big enough to tap, about the last three months fit the screen and older weeks scroll sideways.
 
 A dot in the corner shows how fresh your sources are and opens them.
 

@@ -765,7 +765,10 @@ class ViewTest(unittest.TestCase):
         self.assertIn('@container wz-app (min-width: 680px)', css)
         self.assertIn('@container wz-app (max-width: 679.98px)', css)
         self.assertRegex(css, r'@container wz-app \(min-width: 680px\) \{\s*\.hl-dock \{ display: none; \}')
-        self.assertIn('grid-template-columns: repeat(3, minmax(0, 1fr))', css)
+        # 0.13: wide windows put Activity in the top half (card beside graph), Recovery and Sleep share the bottom half
+        self.assertIn('grid-template-columns: repeat(2, minmax(0, 1fr))', css)
+        self.assertIn('.hl-panel[data-m="activity"] { grid-column: 1 / -1; grid-row: 1; grid-template-columns: subgrid;', css)
+        self.assertLess(html.index('data-m="activity" aria-label'), html.index('data-m="recovery" aria-label'))
         self.assertIn('grid-template-rows: subgrid', css)
         self.assertNotIn('@media (min-width', css)
         # one picked day for all three: pick() re-renders every panel; side-by-side graphs scroll together

@@ -211,7 +211,8 @@ function detailsOf(metric, d, iso) {
   const ws = d.workouts || [], rb = recBand(recov(d));
   const one = w => (cap(w.sport) || 'Workout') + (num(w.minutes) ? ', ' + w.minutes + '\u00a0min' : '');
   return [
-    [sel ? 'Target that day' : 'Target for today', rb ? targetText(rb, loadOf(d)) || null : null, rb ? 'from your recovery' : '', ''],
+    // the target row only when there is no bar (the bar already marks the target with its ticks)
+    [sel ? 'Target that day' : 'Target for today', rb && !actGuide(act(d), recov(d), loadOf(d)) ? targetText(rb, loadOf(d)) || null : null, rb ? 'from your recovery' : '', ''],
     ['Calories', num(d.calories_kcal) ? Math.round(d.calories_kcal).toLocaleString('en-US') + ' kcal' : null, 'burned all day', '', '', fromNote(d, 'calories_kcal')],
     ['Steps', num(d.steps) ? Math.round(d.steps).toLocaleString('en-US') : null, '', '', '', fromNote(d, 'steps')],
     ['Workouts', !Object.keys(d).length || !Array.isArray(d.workouts) && d.source ? null : !ws.length ? 'None' : ws.length === 1 ? one(ws[0]) : ws.length + ': ' + ws.map(w => cap(w.sport) || 'Workout').join(', '), '', '', '', fromNote(d, 'workouts')],
@@ -276,7 +277,7 @@ function inkFor(card) {
 // ---------- the screen ----------
 // Three panels, one per metric, each with its question, focus card and graph. A wide window shows all three side by side
 // (container width, never the device); a narrow one shows the picked metric and puts the picker in a bottom bar.
-const METRICS = ['recovery', 'sleep', 'activity'];
+const METRICS = ['activity', 'recovery', 'sleep'];
 const WIDE = 680;                                    // keep in step with the @container rules in styles.css
 const app = document.querySelector('.wz-app');
 const wide = () => app.clientWidth >= WIDE;
@@ -596,7 +597,8 @@ el('today').onclick = toToday;
 for (const m of METRICS) {
   const X = P[m];
   // Narrow windows: one tap on the card unfolds its details in place (no sheet); wide windows always show them.
-  X.q('hl-focus').addEventListener('click', () => { if (!wide() && rec4(shown())) setOpen(!OPEN); });
+  // Wide windows: Activity always shows its details; Recovery and Sleep (the supporting data below it) fold the same way.
+  X.q('hl-focus').addEventListener('click', () => { if (rec4(shown()) && (!wide() || m !== 'activity')) setOpen(!OPEN); });
   X.cells.addEventListener('click', e => { const b = e.target.closest('button[data-d]'); if (b) { hoverIso = null; pick(b.dataset.d); } });
   X.cells.addEventListener('pointerover', e => {
     if (e.pointerType !== 'mouse') return;
@@ -653,7 +655,7 @@ function poll() { clearTimeout(pollTimer); pollTimer = setTimeout(async () => { 
 
 // Domain Back: an open sheet closes first (WzSheet), then an unfolded card folds (narrow windows), then a past day
 // returns to today, which is the root (the app stays).
-const folds = () => OPEN && !wide();
+const folds = () => OPEN;
 function canBack() { return hasData() && (folds() || !!sel); }
 function goBack() {
   if (!canBack()) return false;
@@ -664,7 +666,7 @@ function goBack() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.12.0' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.13.0' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();
