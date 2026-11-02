@@ -765,9 +765,13 @@ class ViewTest(unittest.TestCase):
         self.assertIn('@container wz-app (min-width: 680px)', css)
         self.assertIn('@container wz-app (max-width: 679.98px)', css)
         self.assertRegex(css, r'@container wz-app \(min-width: 680px\) \{\s*\.hl-dock \{ display: none; \}')
-        # 0.13: wide windows put Activity in the top half (card beside graph), Recovery and Sleep share the bottom half
-        self.assertIn('grid-template-columns: repeat(2, minmax(0, 1fr))', css)
-        self.assertIn('.hl-panel[data-m="activity"] { grid-column: 1 / -1; grid-row: 1; grid-template-columns: subgrid;', css)
+        # 0.14: one row sized by importance: Activity half, Recovery and Sleep a quarter each
+        self.assertIn('grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr)', css)
+        # phones: two tabs, Activity and Recovery & sleep (Sleep stacked under Recovery)
+        dock2 = html[html.index('id="metric"'):html.index('</nav>')]
+        self.assertEqual(dock2.count('role="radio"'), 2)
+        self.assertIn('>Recovery &amp; sleep<', dock2)
+        self.assertIn("recovery: ['recovery', 'sleep']", js)
         self.assertLess(html.index('data-m="activity" aria-label'), html.index('data-m="recovery" aria-label'))
         self.assertIn('grid-template-rows: subgrid', css)
         self.assertNotIn('@media (min-width', css)

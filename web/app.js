@@ -288,7 +288,11 @@ for (const root of document.querySelectorAll('.hl-panel')) {
   P[m] = { m, root, q, cells: q('hl-cells'), months: q('hl-months'), sc: q('hl-gscroll'), gin: q('hl-gin'), graph: q('hl-graph'), tip: q('hl-tip'), G: {} };
 }
 // Panels the window shows right now (hidden ones have no width to size a graph by).
-const visible = () => wide() ? METRICS.map(m => P[m]) : [P[METRIC]];
+// Narrow windows have two tabs: Activity, and Recovery with Sleep under it.
+const TAB = { activity: ['activity'], recovery: ['recovery', 'sleep'] };
+const visible = () => wide() ? METRICS.map(m => P[m]) : TAB[METRIC].map(m => P[m]);
+// Tiled desktop windows fold the slim Recovery and Sleep cards (keep 1100 in step with styles.css); phones fold every card.
+const foldable = m => !wide() || (m !== 'activity' && app.clientWidth < 1100);
 
 function renderAll() {
   const data = hasData();
@@ -326,7 +330,7 @@ function renderFocus() {
   el('when').hidden = !sel;
   for (const m of METRICS) focusPanel(P[m], iso);
   for (const b of el('metric').children) b.setAttribute('aria-checked', String(b.dataset.m === METRIC));
-  for (const m of METRICS) P[m].root.classList.toggle('is-on', m === METRIC);
+  for (const m of METRICS) P[m].root.classList.toggle('is-on', TAB[METRIC].includes(m));
 }
 function focusPanel(X, iso) {
   const q = X.q, m = X.m, d = rec4(iso) || {};
@@ -479,9 +483,15 @@ const scrollAll = (iso, instant) => { for (const X of visible()) scrollToDay(X, 
 let quietUntil = 0, following = false;
 const quiet = ms => { quietUntil = Math.max(quietUntil, performance.now() + ms); };
 function syncScroll(src) {
-  if (following || !wide() || performance.now() < quietUntil) return;
+  if (following || performance.now() < quietUntil || !src.step) return;
   following = true;
-  for (const m of METRICS) { const X = P[m]; if (X !== src && Math.abs(X.sc.scrollLeft - src.sc.scrollLeft) > 1) X.sc.scrollLeft = src.sc.scrollLeft; }
+  // the graphs differ in width, so line them up by week: the same newest visible week in every graph
+  const last = Math.round(src.sc.scrollLeft / src.step) + (src.vis || G.weeks);
+  for (const X of visible()) {
+    if (X === src || !X.step) continue;
+    const left = Math.max(0, (last - (X.vis || G.weeks)) * X.step);
+    if (Math.abs(X.sc.scrollLeft - left) > 1) X.sc.scrollLeft = left;
+  }
   requestAnimationFrame(() => requestAnimationFrame(() => { following = false; }));
 }
 // GitHub-style tooltip over the square under the mouse (taps show the day in the focus cards instead).
@@ -513,7 +523,7 @@ function pick(iso) {
 function setOpen(v) { OPEN = !!v; for (const m of METRICS) { const c = P[m].q('hl-focus'); c.classList.toggle('is-open', OPEN); P[m].q('fexp').setAttribute('aria-expanded', String(OPEN)); c.dataset.on = inkFor(c); } }
 // Switching metric (narrow windows) keeps the selected day.
 function setMetric(m) {
-  if (!SCALE[m] || m === METRIC) return;
+  if (!TAB[m] || m === METRIC) return;
   METRIC = m;
   renderFocus(); renderGraph();
   if (!wide()) el('main').scrollTop = 0;
@@ -598,7 +608,7 @@ for (const m of METRICS) {
   const X = P[m];
   // Narrow windows: one tap on the card unfolds its details in place (no sheet); wide windows always show them.
   // Wide windows: Activity always shows its details; Recovery and Sleep (the supporting data below it) fold the same way.
-  X.q('hl-focus').addEventListener('click', () => { if (rec4(shown()) && (!wide() || m !== 'activity')) setOpen(!OPEN); });
+  X.q('hl-focus').addEventListener('click', () => { if (rec4(shown()) && foldable(m)) setOpen(!OPEN); });
   X.cells.addEventListener('click', e => { const b = e.target.closest('button[data-d]'); if (b) { hoverIso = null; pick(b.dataset.d); } });
   X.cells.addEventListener('pointerover', e => {
     if (e.pointerType !== 'mouse') return;
@@ -655,7 +665,7 @@ function poll() { clearTimeout(pollTimer); pollTimer = setTimeout(async () => { 
 
 // Domain Back: an open sheet closes first (WzSheet), then an unfolded card folds (narrow windows), then a past day
 // returns to today, which is the root (the app stays).
-const folds = () => OPEN;
+const folds = () => OPEN && METRICS.some(m => foldable(m) && P[m].root.offsetParent);
 function canBack() { return hasData() && (folds() || !!sel); }
 function goBack() {
   if (!canBack()) return false;
@@ -666,7 +676,7 @@ function goBack() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.13.0' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.14.0' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();
