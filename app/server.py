@@ -41,7 +41,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent if '__file__' in globals() else Path(os.environ.get('APP_ROOT', '.')).resolve()
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'wizard-health'
-VERSION = '0.14.0'
+VERSION = '0.15.0'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8826')
 CONTRACT = 'wizard.health-data/1'
@@ -946,6 +946,139 @@ def days_list(args):
             'days': [_with_meta(d, names) for d in _read(view, frm, to, _limit(args, 100, 400))]}
 
 
+# ---- Morning report section (format wizard.report-section/1, see docs/report-section.md) ----
+# A morning report asks GET /api/report?date=<report day>&tz=<owner's zone> and gets one section: the Recovery and
+# Sleep card for the newest scored night on or before that day, plus a Monday "Last 7 nights" look. `final` is true
+# only once that night is done: it is the report day's night, scored, and it ended at least REPORT_SETTLE_H hours ago
+# (a night that just ended may still grow when he dozes off again). `wait` asks the report to hold its final version
+# for this section. Read-only, box-only data, no extra pulls.
+REPORT_SETTLE_H = float(os.environ.get('HEALTH_REPORT_SETTLE_H', '1.5'))
+_REC_WORD = {'green': 'Ready', 'yellow': 'So-so', 'red': 'Run down'}
+_REC_PHRASE = {'green': 'Recovered', 'yellow': 'Partly recovered', 'red': 'Run down'}
+_SLEEP_PHRASE = {'Enough': 'enough sleep', 'A bit short': 'a bit short on sleep', 'Short': 'short on sleep'}
+
+
+def _night_scored(d):
+    """Last night's sleep and that morning's recovery are both in (no half-scored night)."""
+    r, s = d.get('readiness') or {}, d.get('sleep') or {}
+    return (r.get('score') is not None and r.get('state', 'scored') == 'scored'
+            and s.get('asleep_h') is not None and bool(s.get('end')) and s.get('state', 'scored') == 'scored')
+
+
+def _report_hm(hours):
+    m = round(float(hours) * 60)
+    return f'{m // 60}h {m % 60}m'
+
+
+def _zone(name):
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(name or 'UTC')
+    except Exception:
+        return dt.timezone.utc
+
+
+def _weekly_sleep_lines(report_date, days, tz):
+    """Monday only: nights slept vs need, typical bedtime and wake, bedtime spread, change from the week before."""
+    import statistics as st
+    if dt.date.fromisoformat(report_date).weekday() != 0:
+        return []
+    days = sorted((d for d in days if d.get('date') and d['date'] <= report_date), key=lambda d: d['date'])
+
+    def nights(chunk):
+        return [d['sleep'] for d in chunk if (d.get('sleep') or {}).get('asleep_h') is not None
+                and d['sleep'].get('start') and d['sleep'].get('end')]
+    week, prev = nights(days[-7:]), nights(days[-14:-7])
+    if len(week) < 4:
+        return []
+
+    def clock(ts, shift):  # minutes after `shift` o'clock so bedtimes around midnight average cleanly
+        t = dt.datetime.fromisoformat(str(ts).replace('Z', '+00:00')).astimezone(tz)
+        return (t.hour * 60 + t.minute - shift * 60) % 1440
+
+    def fmt(m, shift):
+        m = int(round(m + shift * 60)) % 1440
+        return f'{m // 60:02d}:{m % 60:02d}'
+    avg = st.mean(s['asleep_h'] for s in week)
+    needs = [s['need_h'] for s in week if s.get('need_h')]
+    short = sum(1 for s in week if s.get('need_h') and s['asleep_h'] < 0.7 * s['need_h'])
+    beds = [clock(s['start'], 18) for s in week]
+    wakes = [clock(s['end'], 0) for s in week]
+    out = ['', "**Last 7 nights' sleep**", '']
+    out.append(f'- Slept {_report_hm(avg)} a night on average' + (f', needed about {_report_hm(st.mean(needs))}' if needs else '')
+               + (f'; {short} of {len(week)} nights were short.' if needs else '.'))
+    out.append(f'- Usually asleep around {fmt(st.median(beds), 18)} and up around {fmt(st.median(wakes), 0)};'
+               f' earliest bedtime {fmt(min(beds), 18)}, latest {fmt(max(beds), 18)}.')
+    if len(prev) >= 4:
+        diff = round((avg - st.mean(s['asleep_h'] for s in prev)) * 60)
+        pb = st.median(clock(s['start'], 18) for s in prev)
+        bdiff = round(st.median(beds) - pb)
+        sleep_part = 'about the same sleep' if abs(diff) < 15 else f"{_report_hm(abs(diff) / 60)} {'more' if diff > 0 else 'less'} sleep a night"
+        bed_part = 'same bedtime' if abs(bdiff) < 15 else f"bedtime {_report_hm(abs(bdiff) / 60)} {'later' if bdiff > 0 else 'earlier'}"
+        out.append(f'- Versus the week before: {sleep_part}, {bed_part}.')
+    return out
+
+
+def report_section(args, now=None):
+    """The Health section of a morning report (wizard.report-section/1)."""
+    args = args or {}
+    now = now or dt.datetime.now(dt.timezone.utc)
+    tz = _zone(args.get('tz'))
+    report_date = _check_day(args.get('date'), 'date') or now.astimezone(tz).date().isoformat()
+    settle = REPORT_SETTLE_H
+    if args.get('settle_h') not in (None, ''):
+        settle = max(0.0, min(float(args['settle_h']), 6.0))
+    base = {'id': APP_ID, 'title': 'Health', 'link': PREFIX + '/', 'order': 20, 'wait': True,
+            'updated': int(now.timestamp()), 'final': False, 'lines': []}
+    out = {'report': 1, 'app': APP_ID, 'date': report_date, 'sections': []}
+    view = _view(args)
+    if not view[0]:
+        return out  # nothing connected: a quiet report, no section
+    frm = (dt.date.fromisoformat(report_date) - dt.timedelta(days=29)).isoformat()
+    days = {d['date']: d for d in days_list({'from': frm, 'to': report_date}).get('days') or [] if d.get('date')}
+    pick = next((k for k in sorted(days, reverse=True) if _night_scored(days[k])), None)
+    s = daily_summary({'day': pick}) if pick else {}
+    if not pick or s.get('day') != pick or not _night_scored(s):
+        out['sections'].append(dict(base, lines=['_No scored night yet._']))
+        return out
+    rec, sl = s['readiness'], s['sleep']
+    rc = s.get('recovery_colour') or 'grey'
+    sb = s.get('sleep_band') or {}
+    tiles = [
+        {'name': 'Recovery', 'value': f"{rec['score']:.0f}%", 'word': _REC_WORD.get(rc, 'No data'), 'tone': rc,
+         'note': 'from your heart overnight'},
+        {'name': 'Sleep', 'value': _report_hm(sl['asleep_h']), 'word': sb.get('word') or 'No data', 'tone': sb.get('colour') or 'grey',
+         'note': (f"{sb['pct_of_need']}% of {_report_hm(sl['need_h'])} needed" if sb.get('pct_of_need') is not None and sl.get('need_h')
+                  else None)},
+    ]
+    text = str(s.get('text') or '')
+    hrv = re.search(r'HRV ([\d.]+) ms', text)
+    rhr = re.search(r'resting HR (\d+) bpm', text)
+    heart = ', '.join(x for x in (f'HRV {hrv[1]} ms' if hrv else '', f'resting heart rate {rhr[1]} bpm' if rhr else '') if x)
+    line = f"{_REC_PHRASE.get(rc, 'No recovery score')}, {_SLEEP_PHRASE.get(sb.get('word'), 'no sleep score')}." + (f' {heart[0].upper()}{heart[1:]}.' if heart else '')
+    end = dt.date.fromisoformat(pick)
+    strip_days = [(end - dt.timedelta(days=6 - i)).isoformat() for i in range(7)]
+    rows = [{'name': 'Recovery', 'tones': [(days.get(k) or {}).get('recovery_colour') for k in strip_days]},
+            {'name': 'Sleep', 'tones': [((days.get(k) or {}).get('sleep_band') or {}).get('colour') for k in strip_days]}]
+    label, final = ('Last night' if pick == report_date else 'Latest scored'), False
+    if pick == report_date:
+        try:
+            ended = dt.datetime.fromisoformat(str(sl['end']).replace('Z', '+00:00'))
+            final = (now - ended).total_seconds() >= settle * 3600
+        except ValueError:
+            final = False
+        if not final:
+            label = 'Last night so far'
+    card = {'kind': 'health', 'v': 1, 'day': pick, 'label': label, 'link': PREFIX + '/', 'tiles': tiles,
+            'line': line, 'strip': {'days': strip_days, 'rows': rows}}
+    try:
+        weekly = _weekly_sleep_lines(report_date, list(days.values()), tz)
+    except Exception:
+        weekly = []
+    out['sections'].append(dict(base, card=card, lines=weekly, final=final, night_end=sl.get('end')))
+    return out
+
+
 def _avg(xs):
     xs = [x for x in xs if isinstance(x, (int, float))]
     return round(sum(xs) / len(xs), 1) if xs else None
@@ -1165,6 +1298,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, daily_summary(query))
             if path == '/api/days':
                 return self.send(200, days_list(query))
+            if path == '/api/report':
+                return self.send(200, report_section(query))
             if path == '/api/trends':
                 return self.send(200, trends(query))
             if path == '/api/workouts':

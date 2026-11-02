@@ -290,6 +290,43 @@
           }
         }
       }
+    },
+    "/api/report": {
+      "get": {
+        "summary": "Morning report section (wizard.report-section/1): the Recovery and Sleep card for the newest scored night on or before `date`, a Monday 'Last 7 nights' look, and `final` once that night has settled.",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Report day (default: today in tz)"
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Owner's time zone, e.g. Asia/Bangkok"
+          },
+          {
+            "name": "settle_h",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            },
+            "description": "Hours after the night ends before it counts as final (default 1.5)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{report: 1, app, date, sections: [{id, title, lines, card, link, final, wait, updated, order}]}; empty sections when nothing is connected."
+          }
+        }
+      }
     }
   }
 }

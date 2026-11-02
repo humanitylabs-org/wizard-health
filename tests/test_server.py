@@ -286,6 +286,37 @@ class HealthTest(unittest.TestCase):
             self.assertEqual(http(self.port, 'GET', path)[0], 404, path)
         self.assertEqual(http(self.port, 'GET', '/api/summary')[0], 200)
 
+    def test_8_report_section(self):
+        """0.15 morning report section (wizard.report-section/1): card + Monday lines, final once the night has settled."""
+        S, utc = self.S, dt.timezone.utc
+        self.whoop.change(END.isoformat(), readiness={'score': 80, 'band': 'high', 'state': 'scored', 'calibrating': False})
+        S.pull_all(force=True)
+        q = {'date': END.isoformat(), 'tz': 'Asia/Bangkok'}
+        r = S.report_section(q, now=dt.datetime(2026, 10, 20, 8, 0, tzinfo=utc))       # night ended 07:30Z, 30 min ago
+        self.assertEqual((r['report'], r['app'], r['date']), (1, 'wizard-health', END.isoformat()))
+        sec = r['sections'][0]
+        self.assertEqual((sec['id'], sec['title'], sec['link'], sec['wait'], sec['final']), ('wizard-health', 'Health', '/wizard-health/', True, False))
+        self.assertEqual(sec['card']['kind'], 'health')
+        self.assertEqual(sec['card']['label'], 'Last night so far')
+        self.assertEqual([t['name'] for t in sec['card']['tiles']], ['Recovery', 'Sleep'])
+        self.assertEqual(sec['card']['tiles'][1]['value'], '7h 0m')
+        self.assertEqual(len(sec['card']['strip']['days']), 7)
+        self.assertEqual(sec['lines'], [])                                               # a Tuesday: no weekly look
+        r = S.report_section(q, now=dt.datetime(2026, 10, 20, 9, 30, tzinfo=utc))       # 2 h later: final
+        self.assertTrue(r['sections'][0]['final'])
+        self.assertEqual(r['sections'][0]['card']['label'], 'Last night')
+        self.assertTrue(S.report_section(dict(q, settle_h='0'), now=dt.datetime(2026, 10, 20, 7, 31, tzinfo=utc))['sections'][0]['final'])
+        later = S.report_section({'date': '2026-10-22'}, now=dt.datetime(2026, 10, 22, 9, 0, tzinfo=utc))['sections'][0]
+        self.assertEqual((later['card']['day'], later['card']['label'], later['final']), (END.isoformat(), 'Latest scored', False))
+        monday = S.report_section({'date': '2026-10-19', 'tz': 'Asia/Bangkok'})['sections'][0]
+        self.assertIn("**Last 7 nights' sleep**", monday['lines'])
+        self.assertTrue(any(ln.startswith('- Slept 7h 0m a night') for ln in monday['lines']))
+        code, body = http(self.port, 'GET', '/api/report?date=2026-10-20&tz=Asia/Bangkok')
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)['sections'][0]['id'], 'wizard-health')
+        self.assertEqual(http(self.port, 'GET', '/wizard-health/api/report?date=2026-10-20')[0], 200)
+        self.assertEqual(http(self.port, 'GET', '/api/report?date=20-10-2026')[0], 400)
+
     def test_6_empty_state(self):
         """No connector reachable and nothing held: the screen gets the connector apps to open."""
         S = self.S
@@ -299,6 +330,7 @@ class HealthTest(unittest.TestCase):
             self.assertIsNone(st['primary'])
             self.assertEqual([(c['id'], c['app_path'], c['installed']) for c in st['connectors']], [('wizard-whoop', '/wizard-whoop/', False)])
             self.assertFalse(S.daily_summary()['available'])
+            self.assertEqual(S.report_section({'date': '2026-10-20'})['sections'], [])   # nothing connected: no section
         finally:
             S.GRANTS_FILE, S.ENV_SOURCES, S.DATA = saved
             S._PROBE.update(at=0, list=None)

@@ -15,7 +15,7 @@ Health never talks to a provider and never takes keys. It reads connector apps t
 ## Interfaces
 
 - Screen: `/wizard-health/`
-- HTTP API (see `openapi.json`): `GET /api/status`, `/api/summary[?day=&source=]` (daily summary for other apps such as a morning report), `/api/days`, `/api/trends?days=7|30|90`, `/api/workouts`, `/api/sleep`; `POST /api/refresh`, `/api/primary`, `/api/forget`.
+- HTTP API (see `openapi.json`): `GET /api/status`, `/api/summary[?day=&source=]` (daily summary for other apps such as a morning report), `/api/days`, `/api/trends?days=7|30|90`, `/api/workouts`, `/api/sleep`, `/api/report?date=&tz=` (its Morning Report section in the shared `wizard.report-section/1` format: the Recovery and Sleep card, a Monday "Last 7 nights" look, and `final` once last night has settled, i.e. scored and ended at least `HEALTH_REPORT_SETTLE_H` = 1.5 h ago; spec: oscarhenrycollins/morning-report `docs/report-section.md`); `POST /api/refresh`, `/api/primary`, `/api/forget`.
 - MCP (`POST /mcp`, box-only): `health_daily_summary`, `health_days`, `health_trends`, `health_sleep`, `health_workouts`, `health_status`.
 
 ## Development
