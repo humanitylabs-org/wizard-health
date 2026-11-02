@@ -781,7 +781,7 @@ class ViewTest(unittest.TestCase):
                      'A bit much', 'Too much for today', 'No recovery data', 'out of ', 'Target for today', 'from your recovery',
                      'Back to today', 'usual', 'Resting heart rate', 'Blood oxygen', 'Skin temperature', 'Calories', 'Steps', 'Workouts',
                      'Heart rate variability', 'higher = more recovered', 'lower is better', 'Time in bed', 'Dreaming (REM)', 'Deep',
-                     'did you get enough', 'did it match your recovery', 'Read from your heart overnight, not just your sleep.'):
+                     'did you get enough', 'did it match your recovery', 'Measured from your heart overnight, so it can differ from your sleep.'):
             self.assertIn(word, js + html + words, word)
         # 0.10: several sources: per-source states with Set up links to the connector's own app, the main-source choice,
         # the tiny origin note of a filled metric, and an honest no-score for a source without readiness
@@ -901,7 +901,7 @@ class WordsTest(unittest.TestCase):
     def test_titles(self):
         # the title says what each metric is; exactly one line (Recovery's) explains recovery vs sleep
         self.assertEqual(self.run_js("W.title('recovery')"),
-                         {'name': 'Recovery', 'gloss': 'how ready your body is', 'sub': 'Read from your heart overnight, not just your sleep.'})
+                         {'name': 'Recovery', 'gloss': 'how ready your body is', 'sub': 'Measured from your heart overnight, so it can differ from your sleep.'})
         self.assertEqual(self.run_js("W.title('sleep').sub"), '')
         self.assertEqual(self.run_js("W.title('activity').sub"), '')
         self.assertEqual(self.run_js("W.title('sleep').gloss"), 'did you get enough')
@@ -912,6 +912,14 @@ class WordsTest(unittest.TestCase):
         self.assertEqual(self.run_js("W.sleepSay(308, 571)"), '4h 23m less than you needed.')
         self.assertEqual(self.run_js("W.sleepSay(40, 70)"), '30m less than you needed.')
         self.assertEqual(self.run_js("W.sleepSay(500, 480)"), 'All the sleep you needed.')
+        # 0.12: with the need's parts, say which part was missed (the real 2 Nov night: 6h 20m of 9h 43m, usual 7h 36m)
+        self.assertEqual(self.run_js("W.sleepSay(380, 583, 456)"), '3h 23m short: 1h 16m under a normal night, plus 2h 7m to catch up from earlier nights.')
+        self.assertEqual(self.run_js("W.sleepSay(470, 583, 456)"), 'A normal night, but you are still 1h 53m behind from earlier short nights.')
+        self.assertEqual(self.run_js("W.sleepSay(400, 466, 456)"), '1h 6m less than you needed.')      # catch-up under 15m: plain
+        self.assertEqual(self.run_js("W.sleepSay(600, 583, 456)"), 'All the sleep you needed.')
+        self.assertEqual(self.run_js("W.needGloss(583, 456)"), 'usual 7h 36m + 2h 7m catch-up')
+        self.assertEqual(self.run_js("W.needGloss(460, 456)"), 'your usual night')
+        self.assertEqual(self.run_js("W.needGloss(583, null)"), '')
         for say in self.run_js("[...Object.values(W.REC_SAY.now), ...Object.values(W.REC_SAY.past), ...Object.values(W.MATCH_SAY.now), ...Object.values(W.MATCH_SAY.past)]"):
             self.assertLessEqual(len(say), 45, say)
 
@@ -989,9 +997,10 @@ class WordsTest(unittest.TestCase):
     def test_recovery_vs_sleep(self):
         R = lambda score, h, need, past=False: self.run_js(f"W.recoveryVsSleep({score}, {h}, {need}, {str(past).lower()})")
         # short sleep (under 70% of need), heart held up
-        self.assertEqual(R(80, 5, 9), 'Short sleep, but your heart handled it.')
-        self.assertEqual(R(41, 5.13, 9.52), 'Short sleep, but your heart held up okay.')   # a real short night
-        self.assertEqual(R(80, 5, 9, True), 'Short sleep, but your heart handled it.')
+        self.assertEqual(R(80, 5, 9), 'Short sleep, but your heart still looks rested.')
+        self.assertEqual(R(41, 5.13, 9.52), 'Your heart coped, but short sleep is holding this back.')   # a real short night
+        self.assertEqual(R(41, 5.13, 9.52, True), 'Your heart coped, but short sleep held this back.')
+        self.assertEqual(R(80, 5, 9, True), 'Short sleep, but your heart still looks rested.')
         # enough sleep, heart says otherwise
         low = R(20, 8.5, 9)
         self.assertTrue(low.startswith('Enough sleep, so something else'), low)

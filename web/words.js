@@ -100,18 +100,29 @@
   // Each metric's title says what it is, so no separate question is needed. Only Recovery adds one line: how it
   // differs from sleep (beginners find the two confusing).
   const TITLE = {
-    recovery: { name: 'Recovery', gloss: 'how ready your body is', sub: 'Read from your heart overnight, not just your sleep.' },
+    recovery: { name: 'Recovery', gloss: 'how ready your body is', sub: 'Measured from your heart overnight, so it can differ from your sleep.' },
     sleep: { name: 'Sleep', gloss: 'did you get enough' },
     activity: { name: 'Activity', gloss: 'did it match your recovery' },
   };
   const title = metric => { const t = TITLE[metric]; return t ? { name: t.name, gloss: t.gloss, sub: t.sub || '' } : { name: '', gloss: '', sub: '' }; };
 
-  // Sleep's summary: how far short of need, or enough.
-  function sleepSay(asleepMin, needMin) {
+  // Sleep's summary: how far short of need, or enough. With the need's parts (usual night + catch-up for earlier short
+  // nights), it says which part was missed, so a beginner sees why 6 hours can still be red.
+  const mins = m => { m = Math.round(m); return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm'; };
+  const CATCH = 15;   // minutes of catch-up worth mentioning
+  function sleepSay(asleepMin, needMin, usualMin) {
     const missing = needMin - asleepMin;
     if (missing <= 0) return 'All the sleep you needed.';
-    const m = Math.round(missing), d = m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm';
-    return d + ' less than you needed.';
+    const catchUp = num(usualMin) ? needMin - usualMin : 0;
+    if (catchUp < CATCH) return mins(missing) + ' less than you needed.';
+    if (asleepMin >= usualMin) return 'A normal night, but you are still ' + mins(missing) + ' behind from earlier short nights.';
+    return mins(missing) + ' short: ' + mins(usualMin - asleepMin) + ' under a normal night, plus ' + mins(catchUp) + ' to catch up from earlier nights.';
+  }
+  // The need's one-line gloss for the details row: "usual 7h 36m + 2h 7m catch-up" (or just "your usual night").
+  function needGloss(needMin, usualMin) {
+    if (!num(usualMin) || !num(needMin)) return '';
+    const catchUp = needMin - usualMin;
+    return catchUp < CATCH ? 'your usual night' : 'usual ' + mins(usualMin) + ' + ' + mins(catchUp) + ' catch-up';
   }
 
   // When sleep and recovery disagree, one short sentence says why: recovery is read from the heart, not hours asleep.
@@ -119,8 +130,8 @@
   function recoveryVsSleep(score, asleepH, needH, past) {
     const r = recBand(score), s = num(needH) ? sleepBand(asleepH, needH) : null;   // only against a real need
     if (!r || !s) return '';
-    if (s === 'lo' && r === 'hi') return 'Short sleep, but your heart handled it.';
-    if (s === 'lo' && r === 'md') return 'Short sleep, but your heart held up okay.';
+    if (s === 'lo' && r === 'hi') return 'Short sleep, but your heart still looks rested.';
+    if (s === 'lo' && r === 'md') return past ? 'Your heart coped, but short sleep held this back.' : 'Your heart coped, but short sleep is holding this back.';
     if (s === 'hi' && r === 'lo') return past ? 'Enough sleep, so something else (stress, illness, alcohol) was weighing on you.'
       : 'Enough sleep, so something else (stress, illness, alcohol) is weighing on you.';
     if (s === 'hi' && r === 'md') return past ? 'Enough sleep, so something else may have held you back.' : 'Enough sleep, so something else may be holding you back.';
@@ -132,6 +143,6 @@
   const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
   const betterInk = (fill, inkA, inkB) => contrast(fill, inkA) >= contrast(fill, inkB) ? 'a' : 'b';
 
-  const W = { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, TARGET, targets, targetText, actMatch, actGuide, MATCH_SAY, matchSay, REC_SAY, TITLE, title, sleepSay, recoveryVsSleep, contrast, betterInk };
+  const W = { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, TARGET, targets, targetText, actMatch, actGuide, MATCH_SAY, matchSay, REC_SAY, TITLE, title, sleepSay, needGloss, recoveryVsSleep, contrast, betterInk };
   if (typeof module === 'object' && module.exports) module.exports = W; else root.HealthWords = W;
 })(typeof window !== 'undefined' ? window : globalThis);

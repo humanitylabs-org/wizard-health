@@ -29,7 +29,7 @@ async function api(path, data) {
 }
 function h(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
 function s(tag, attrs) { const n = document.createElementNS(SVG, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; }
-const { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actMatch, actGuide, matchSay, targetText, REC_SAY, title, sleepSay, recoveryVsSleep, betterInk } = window.HealthWords;
+const { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actMatch, actGuide, matchSay, targetText, REC_SAY, title, sleepSay, needGloss, recoveryVsSleep, betterInk } = window.HealthWords;
 const DASH = '\u2013';
 const hm = hours => { if (!num(hours)) return DASH; const m = Math.round(hours * 60); return Math.floor(m / 60) + 'h ' + (m % 60) + 'm'; };
 const addDays = (iso, n) => new Date(Date.parse(iso + 'T12:00:00Z') + n * DAY).toISOString().slice(0, 10);
@@ -105,6 +105,8 @@ const rec4 = iso => (SUM && SUM.available && SUM.day === iso) ? SUM : BY[iso] ||
 const recov = d => ((d || {}).readiness || {}).score;
 const sleepH = d => ((d || {}).sleep || {}).asleep_h;
 const needH = d => ((d || {}).sleep || {}).need_h;
+// The usual night inside the need (the rest is catch-up for earlier short nights), when the source splits it.
+const usualH = d => (((d || {}).sleep || {}).need_parts || {}).usual_h;
 const act = d => ((d || {}).load || {}).value;
 const loadOf = d => (d || {}).load || null;
 // The source's own scale for the card: "out of 21" (WHOOP, a scale with a top), or what it counts ("active zone
@@ -164,7 +166,8 @@ function focusOf(metric, d, past) {
     const sh = sleepH(d), nd = needH(d), b = sleepBand(sh, nd);
     if (!num(sh)) return { value: DASH, say: 'No sleep recorded for this night.' };
     if (!num(nd) || nd <= 0) return { value: hm(sh), chip: SLEEP_WORD[b], say: 'You slept ' + dur(sh) + '.' };
-    return { value: hm(sh), of: 'of ' + hm(nd) + ' needed', chip: SLEEP_WORD[b], say: sleepSay(Math.round(sh * 60), Math.round(nd * 60)) };
+    const um = num(usualH(d)) ? Math.round(usualH(d) * 60) : null;
+    return { value: hm(sh), of: 'of ' + hm(nd) + ' needed', chip: SLEEP_WORD[b], say: sleepSay(Math.round(sh * 60), Math.round(nd * 60), um) };
   }
   const a = act(d);
   if (!num(a)) return { value: DASH, say: 'No activity recorded for this day.' };
@@ -196,7 +199,9 @@ function detailsOf(metric, d, iso) {
   }
   if (metric === 'sleep') {
     const sl = d.sleep || {};
+    const nd = needH(d), um = num(usualH(d)) ? Math.round(usualH(d) * 60) : null;
     return [
+      ['Your need', num(nd) && nd > 0 ? hm(nd) : null, num(nd) ? needGloss(Math.round(nd * 60), um) : '', ''],
       ['Deep', num(sl.deep_h) ? dur(sl.deep_h) : null, 'body repair', '', 'deep'],
       ['Dreaming (REM)', num(sl.rem_h) ? dur(sl.rem_h) : null, 'mind and memory', '', 'rem'],
       ['Light', num(sl.light_h) ? dur(sl.light_h) : null, '', '', 'light'],
@@ -659,7 +664,7 @@ function goBack() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.11.0' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.12.0' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();
