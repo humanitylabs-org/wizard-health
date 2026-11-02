@@ -8,7 +8,7 @@ const SVG = 'http://www.w3.org/2000/svg';
 const DAY = 86400000;
 let ST = null, SUM = null, DAYS = [], BY = {}, pollTimer = null;
 let sel = null;            // the selected date (ISO); null = the newest day ("today")
-let METRIC = 'recovery';   // what colours the squares
+let METRIC = 'activity';   // narrow windows: the metric shown; always opens on Activity (what to do today)
 let hoverIso = null;
 let OPEN = false;          // narrow windows: the summary card's details are folded until the card is tapped
 
@@ -29,7 +29,7 @@ async function api(path, data) {
 }
 function h(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
 function s(tag, attrs) { const n = document.createElementNS(SVG, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; }
-const { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actMatch, matchSay, targetText, REC_SAY, title, sleepSay, recoveryVsSleep, betterInk } = window.HealthWords;
+const { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actMatch, actGuide, matchSay, targetText, REC_SAY, title, sleepSay, recoveryVsSleep, betterInk } = window.HealthWords;
 const DASH = '\u2013';
 const hm = hours => { if (!num(hours)) return DASH; const m = Math.round(hours * 60); return Math.floor(m / 60) + 'h ' + (m % 60) + 'm'; };
 const addDays = (iso, n) => new Date(Date.parse(iso + 'T12:00:00Z') + n * DAY).toISOString().slice(0, 10);
@@ -171,7 +171,9 @@ function focusOf(metric, d, past) {
   const mt = actMatch(a, recov(d), loadOf(d));
   if (!mt && !num(recov(d))) return { value: actFmt(a, d), of: actOf(d), chip: 'No recovery data', say: 'No recovery score, so no target for this day.' };
   if (!mt) return { value: actFmt(a, d), of: actOf(d), chip: 'No target', say: 'No scale from this source to set a target.' };
-  return { value: actFmt(a, d), of: actOf(d), chip: mt.word, say: matchSay(mt, recov(d), past) };
+  // The direction in one line ("11.5 to go" / "1.5 over") and the bar that draws it: a yellow card says which way to go.
+  const gd = actGuide(a, recov(d), loadOf(d), past);
+  return { value: actFmt(a, d), of: actOf(d), chip: mt.word, say: gd ? gd.text : matchSay(mt, recov(d), past), guide: gd };
 }
 // The 30 days before a date, averaged: "your usual".
 function usual(get, iso) { const xs = []; for (let i = 1; i <= 30; i++) xs.push(get(rec4(addDays(iso, -i)))); return mean(xs); }
@@ -227,6 +229,19 @@ function fillRows(dl, list) {
     r.append(dt, dd); dl.append(r);
   }
   dl.hidden = !dl.children.length;
+}
+// Activity's progress bar: the green target zone on the scale, a marker where the day's effort is now, the zone's edges
+// as ticks. Drawn in the card's own text colour (the fill already carries the verdict), so it reads on every fill.
+const pct = (x, max) => Math.max(0, Math.min(100, 100 * x / max)) + '%';
+function fillBar(bar, g) {
+  bar.hidden = !g;
+  if (!g) return;
+  const zone = bar.querySelector('.hl-azone'), mark = bar.querySelector('.hl-amark'), ticks = bar.querySelector('.hl-aticks');
+  zone.style.left = pct(g.lo, g.max); zone.style.width = pct(g.hi - g.lo, g.max);
+  mark.style.left = pct(g.v, g.max);
+  const fmt = x => Number.isInteger(x) ? String(x) : x.toFixed(1);
+  ticks.replaceChildren(...(g.lo > 0 ? [g.lo, g.hi] : [g.hi]).map(x => { const t = h('span', '', fmt(x)); t.style.left = pct(x, g.max); return t; }));
+  bar.setAttribute('aria-label', `Target ${g.lo > 0 ? fmt(g.lo) + ' to ' : 'under '}${fmt(g.hi)}, now ${fmt(g.v)}`);
 }
 // Sleep stages as one thin bar: deep, dreaming, light and awake, in the order the eye reads them.
 function fillStages(bar, sl) {
@@ -320,6 +335,7 @@ function focusPanel(X, iso) {
   q('fof').textContent = F.of || '';
   q('fchip').textContent = F.chip || ''; q('fchip').hidden = !F.chip;
   q('fsay').textContent = F.say + (F.also ? ' ' + F.also : '');
+  fillBar(q('fgoal'), F.guide);
   fillStages(q('fstages'), m === 'sleep' ? d.sleep || {} : {});
   fillRows(q('fkv'), rec4(iso) ? detailsOf(m, d, iso) : []);
   const from = rec4(iso) ? headFrom(m, d) : '';
@@ -493,7 +509,6 @@ function setOpen(v) { OPEN = !!v; for (const m of METRICS) { const c = P[m].q('h
 function setMetric(m) {
   if (!SCALE[m] || m === METRIC) return;
   METRIC = m;
-  try { localStorage.setItem(PREF, m); } catch (e) {}
   renderFocus(); renderGraph();
   if (!wide()) el('main').scrollTop = 0;
 }
@@ -605,10 +620,9 @@ new ResizeObserver(() => {
 }).observe(app);
 
 // ---------- loading (cached copy first, then fresh) ----------
-const CACHE = 'wizard-health.screen.v6', PREF = 'wizard-health.metric';
+const CACHE = 'wizard-health.screen.v6';
 function saveCache() { try { localStorage.setItem(CACHE, JSON.stringify({ ST, SUM, DAYS })); } catch (e) {} }
 function loadCache() {
-  try { const m = localStorage.getItem(PREF); if (SCALE[m]) METRIC = m; } catch (e) {}
   try { const c = JSON.parse(localStorage.getItem(CACHE) || 'null'); if (c && c.ST) { ST = c.ST; SUM = c.SUM; setDays(c.DAYS || []); return true; } } catch (e) {}
   return false;
 }
@@ -645,7 +659,7 @@ function goBack() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.10.1' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.11.0' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();

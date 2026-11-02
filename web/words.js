@@ -72,6 +72,25 @@
     return m.band === 'lo' ? S.much : S.over;
   }
 
+  // Activity's progress bar and its one direction sentence: where the day's effort sits against its target zone, so a
+  // yellow card says which way to go ("11.5 to go" vs "1.5 over"). Null when actMatch has no verdict.
+  // { lo, hi, max, v, side, text }: lo/hi = the green zone, max = the bar's end (the scale's top, never below the value).
+  function actGuide(strain, score, load, past) {
+    const m = actMatch(strain, score, load), t = targets(load), r = recBand(score);
+    if (!m || !t) return null;
+    const v = Math.round(strain * 10) / 10, [lo, hi] = t[r];
+    const whole = num(t.max) && t.max >= 50;
+    const f = x => { const y = whole ? Math.round(x) : Math.round(x * 10) / 10; return Number.isInteger(y) ? String(y) : y.toFixed(1); };
+    const max = Math.max(num(t.max) ? t.max : hi + 2 * t.slack, v);
+    let text;
+    if (m.side === 'under') text = past ? f(lo - v) + ' short of your target.' : f(lo - v) + ' to go to reach your target.';
+    else if (m.side === 'over') text = past ? f(v - hi) + ' over your target.' : m.band === 'lo' ? f(v - hi) + ' over your target. Stop for today.' : f(v - hi) + ' over your target. Take it easy.';
+    else if (r === 'lo') text = past ? 'Rest was right that day.' : 'Rest is right today. Stay under ' + f(hi) + '.';
+    else if (past) text = 'Inside your target.';
+    else text = v >= hi ? 'Top of your target. Stop here.' : 'In your target. Fine to stop, or go up to ' + f(hi) + '.';
+    return { lo: r === 'lo' ? 0 : lo, hi, max, v, side: m.side, text };
+  }
+
   // One short summary per card.
   const REC_SAY = {
     now: { hi: 'Well recovered. A good day to push.', md: 'Partly recovered. A normal day is fine.', lo: 'Not recovered. Take it easy today.' },
@@ -113,6 +132,6 @@
   const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
   const betterInk = (fill, inkA, inkB) => contrast(fill, inkA) >= contrast(fill, inkB) ? 'a' : 'b';
 
-  const W = { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, TARGET, targets, targetText, actMatch, MATCH_SAY, matchSay, REC_SAY, TITLE, title, sleepSay, recoveryVsSleep, contrast, betterInk };
+  const W = { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, TARGET, targets, targetText, actMatch, actGuide, MATCH_SAY, matchSay, REC_SAY, TITLE, title, sleepSay, recoveryVsSleep, contrast, betterInk };
   if (typeof module === 'object' && module.exports) module.exports = W; else root.HealthWords = W;
 })(typeof window !== 'undefined' ? window : globalThis);

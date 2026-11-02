@@ -50,9 +50,9 @@
     <!-- Narrow windows: the picker is a thumb bar at the bottom of the window, below the content (never over it) -->
     <nav class="hl-dock" id="dock" aria-label="Show" hidden>
       <div class="hl-seg" id="metric" role="radiogroup" aria-label="Show">
-        <button type="button" role="radio" data-m="recovery" aria-checked="true">Recovery</button>
+        <button type="button" role="radio" data-m="activity" aria-checked="true">Activity</button>
+        <button type="button" role="radio" data-m="recovery" aria-checked="false">Recovery</button>
         <button type="button" role="radio" data-m="sleep" aria-checked="false">Sleep</button>
-        <button type="button" role="radio" data-m="activity" aria-checked="false">Activity</button>
       </div>
     </nav>
     <p id="status" class="wz-status wz-sr" role="status" aria-live="polite"></p>
@@ -64,6 +64,7 @@
     <h2 class="hl-title"><span class="tname"></span> <span class="tgloss"></span><small class="tsub" hidden></small></h2>
     <section class="hl-focus" aria-live="polite">
       <div class="hl-fval"><b class="fnum"></b><small class="fof"></small><span class="hl-chip fchip" hidden></span></div>
+      <div class="hl-abar fgoal" role="img" hidden><div class="hl-atrack"><i class="hl-azone"></i><i class="hl-amark"></i></div><div class="hl-aticks"></div></div>
       <p class="hl-say fsay"></p>
       <div class="hl-stbar fstages" role="img" hidden></div>
       <dl class="hl-kv fkv"></dl>

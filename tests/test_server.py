@@ -731,6 +731,15 @@ class ViewTest(unittest.TestCase):
         for gone in ('openAbout', 'Why?', "'More'", 'Last 30 days'):
             self.assertNotIn(gone, js, gone)
         self.assertIn("el('when').hidden = !sel", js)
+        # 0.11: narrow windows always open on Activity (first in the bottom bar); its card draws the target zone bar
+        dock = html[html.index('id="metric"'):]
+        self.assertLess(dock.index('data-m="activity"'), dock.index('data-m="recovery"'))
+        self.assertIn('data-m="activity" aria-checked="true"', html)
+        self.assertIn("let METRIC = 'activity'", js)
+        self.assertNotIn('wizard-health.metric', js)
+        for need in ('hl-abar fgoal', 'hl-azone', 'hl-amark', 'hl-aticks'):
+            self.assertIn(need, html)
+        self.assertIn('actGuide(', js)
         # the card wears its day's square class: same variable, so card fill == square fill
         self.assertIn("SCALE[m].cls(d)", js)
         self.assertRegex(css, r'\.hl-focus \{[^}]*background: var\(--c, var\(--cell0\)\)')
@@ -957,6 +966,25 @@ class WordsTest(unittest.TestCase):
         self.assertEqual(S(16, 50, False), 'A little more than your body is ready for.')
         self.assertEqual(S(3, 20, False), 'Taking it easy is right today.')
         self.assertEqual(self.run_js("[W.targetText('hi'), W.targetText('md'), W.targetText('lo')]"), ['14\u201318', '10\u201314', 'under 10'])
+
+    def test_activity_guide(self):
+        # 0.11: the Activity bar + direction line, so a yellow card says which way to go
+        G = lambda v, r, past=False: self.run_js(f"W.actGuide({v}, {r}, undefined, {str(past).lower()})")
+        g = G(2.5, 70)                                                # the real 2 Nov morning: Ready, 2.5 of 14-18
+        self.assertEqual((g['lo'], g['hi'], g['max'], g['v'], g['side']), (14, 18, 21, 2.5, 'under'))
+        self.assertEqual(g['text'], '11.5 to go to reach your target.')
+        self.assertEqual(G(2.5, 70, True)['text'], '11.5 short of your target.')
+        self.assertEqual(G(12, 50)['text'], 'In your target. Fine to stop, or go up to 14.')
+        self.assertEqual(G(14, 50)['text'], 'Top of your target. Stop here.')
+        self.assertEqual(G(15.5, 50)['text'], '1.5 over your target. Take it easy.')
+        self.assertEqual(G(18, 50)['text'], '4 over your target. Stop for today.')
+        self.assertEqual(G(18, 50, True)['text'], '4 over your target.')
+        r = G(4, 20)                                                  # Run down: the zone runs from 0, rest is right
+        self.assertEqual((r['lo'], r['hi'], r['text']), (0, 10, 'Rest is right today. Stay under 10.'))
+        self.assertIsNone(G(5, 'null'))                               # no recovery: no bar
+        # the direction always agrees with the colour's side
+        for v in (0, 9.9, 10, 14, 14.1, 17.1, 21):
+            self.assertEqual(G(v, 50)['side'], self.run_js(f"W.actMatch({v}, 50).side"), v)
 
     def test_recovery_vs_sleep(self):
         R = lambda score, h, need, past=False: self.run_js(f"W.recoveryVsSleep({score}, {h}, {need}, {str(past).lower()})")
