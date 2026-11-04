@@ -1,7 +1,7 @@
 ---
 name: wizard-health
 description: Use when the owner asks about his health, recovery, readiness, HRV, sleep, strain, workouts or trends.
-version: 0.15.0
+version: 0.15.1
 author: Humanity Labs
 license: GPL-3.0-only
 metadata:

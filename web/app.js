@@ -547,6 +547,8 @@ function openSources() {
   const nodes = [];
   const list = h('ul', 'hl-srcs');
   const choose = ST.sources.filter(x => x.connected).length >= 2;
+  // Once a source is connected, 'Set up' for the others is a quiet choice, not the call to action: the eye goes to what works.
+  const setupCls = ST.sources.some(x => x.connected) ? 'wz-button secondary hl-sm' : 'wz-button hl-sm';
   for (const x of ST.sources) {
     const st = stateOf(x), [word, dot] = STATE[st] || ['Unknown', 'off'];
     const li = h('li', 'hl-src');
@@ -563,7 +565,7 @@ function openSources() {
     li.append(m);
     const a = h('span', 'hl-src-act');
     if (choose && x.connected && !x.primary) { const b = h('button', 'wz-button secondary hl-sm', 'Make main'); b.type = 'button'; b.onclick = () => setPrimary(x.id); a.append(b); }
-    if (st === 'not_set_up') a.append(appLink('Set up', x.id, x.app_path, 'wz-button hl-sm'));
+    if (st === 'not_set_up') a.append(appLink('Set up', x.id, x.app_path, setupCls));
     else if (st === 'sign_in') a.append(appLink('Sign in', x.id, x.app_path, 'wz-button hl-sm'));
     else if (x.installed && !(choose && x.connected && !x.primary)) a.append(appLink('Open', x.id, x.app_path, 'wz-button secondary hl-sm'));
     else if (!x.installed) { const b = h('button', 'wz-button secondary hl-sm', 'Remove'); b.type = 'button'; b.onclick = () => forget(x.id); a.append(b); }
@@ -575,7 +577,7 @@ function openSources() {
     const li = h('li', 'hl-src'); li.dataset.state = 'not_set_up';
     li.append(h('i', 'hl-sdot off'));
     const m = h('span', 'hl-src-main'); m.append(h('b', '', c.name), h('small', '', 'Not set up')); li.append(m);
-    const a = h('span', 'hl-src-act'); a.append(appLink('Set up', c.id, c.app_path, 'wz-button hl-sm')); li.append(a);
+    const a = h('span', 'hl-src-act'); a.append(appLink('Set up', c.id, c.app_path, setupCls)); li.append(a);
     list.append(li);
   }
   nodes.push(list);
