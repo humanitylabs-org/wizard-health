@@ -41,7 +41,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent if '__file__' in globals() else Path(os.environ.get('APP_ROOT', '.')).resolve()
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'wizard-health'
-VERSION = '0.15.1'
+VERSION = '0.16.0'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8826')
 CONTRACT = 'wizard.health-data/1'
@@ -949,10 +949,13 @@ def days_list(args):
 # ---- Morning report section (format wizard.report-section/1, see docs/report-section.md) ----
 # A morning report asks GET /api/report?date=<report day>&tz=<owner's zone> and gets one section: the Recovery and
 # Sleep card for the newest scored night on or before that day, plus a Monday "Last 7 nights" look. `final` is true
-# only once that night is done: it is the report day's night, scored, and it ended at least REPORT_SETTLE_H hours ago
-# (a night that just ended may still grow when he dozes off again). `wait` asks the report to hold its final version
-# for this section. Read-only, box-only data, no extra pulls.
-REPORT_SETTLE_H = float(os.environ.get('HEALTH_REPORT_SETTLE_H', '1.5'))
+# only once that night is done (see wake_info): it is the report day's night, scored, it ended at least the settle
+# time ago (a night that just ended may still grow when he dozes off again), and the source has been read again since
+# then. `wait` asks the report to hold its final version for this section. Read-only, box-only data, no extra pulls.
+# 0.16: the settle is HEALTH_WAKE_SETTLE_MIN (30) minutes; HEALTH_REPORT_SETTLE_H still wins when set (older boxes).
+WAKE_SETTLE_MIN = float(os.environ.get('HEALTH_WAKE_SETTLE_MIN', '30'))
+REPORT_SETTLE_H = (float(os.environ['HEALTH_REPORT_SETTLE_H']) if os.environ.get('HEALTH_REPORT_SETTLE_H')
+                   else WAKE_SETTLE_MIN / 60)
 _REC_WORD = {'green': 'Ready', 'yellow': 'So-so', 'red': 'Run down'}
 _REC_PHRASE = {'green': 'Recovered', 'yellow': 'Partly recovered', 'red': 'Run down'}
 _SLEEP_PHRASE = {'Enough': 'enough sleep', 'A bit short': 'a bit short on sleep', 'Short': 'short on sleep'}
@@ -1019,15 +1022,69 @@ def _weekly_sleep_lines(report_date, days, tz):
     return out
 
 
+def _ts(v):
+    try:
+        t = dt.datetime.fromisoformat(str(v).replace('Z', '+00:00'))
+        return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _checked_at(sid):
+    """When Health last saw this source's data fresh: the older of the source's own last sync and Health's last pull."""
+    row = _source_rows().get(sid) or {}
+    try:
+        st = json.loads(row.get('status') or '{}')
+    except ValueError:
+        st = {}
+    times = [t for t in (_ts(st.get('last_sync')), _ts(row.get('last_pull'))) if t]
+    return min(times) if len(times) == 2 else None
+
+
+def _settle_h(args):
+    if (args or {}).get('settle_h') not in (None, ''):
+        return max(0.0, min(float(args['settle_h']), 6.0))
+    return REPORT_SETTLE_H
+
+
+def wake_info(args=None, now=None, days=None):
+    """The owner's wake signal for a day: when last night's sleep ended (`woke_at`, straight from the source) and
+    whether that night is final (`night_final`): scored (sleep + recovery), ended at least the settle time ago, and
+    the source synced again after that, still showing the same end. `final_at` = woke_at + settle (earliest final)."""
+    args = args or {}
+    now = now or dt.datetime.now(dt.timezone.utc)
+    tz = _zone(args.get('tz'))
+    date = _check_day(args.get('date'), 'date') or now.astimezone(tz).date().isoformat()
+    settle = _settle_h(args)
+    out = {'date': date, 'woke_at': None, 'fell_asleep_at': None, 'night_scored': False, 'night_final': False,
+           'final_at': None, 'settle_minutes': round(settle * 60), 'source': None, 'checked_at': None}
+    if days is None:
+        view = _view(args)
+        if not view[0]:
+            return out
+        days = {d['date']: d for d in days_list({'from': date, 'to': date}).get('days') or [] if d.get('date')}
+    d = days.get(date)
+    sl = (d or {}).get('sleep') or {}
+    woke = _ts(sl.get('end'))
+    if not d or not woke:
+        return out
+    sid = ((d.get('origins') or {}).get('sleep')) or d.get('source')
+    checked = _checked_at(sid) if sid else None
+    final_at = woke + dt.timedelta(hours=settle)
+    scored = _night_scored(d)
+    out.update(woke_at=_iso(woke), fell_asleep_at=_iso(_ts(sl['start'])) if _ts(sl.get('start')) else None,
+               night_scored=scored, final_at=_iso(final_at), source=sid, checked_at=_iso(checked) if checked else None,
+               night_final=bool(scored and now >= final_at and (checked is None or checked >= final_at)))
+    return out
+
+
 def report_section(args, now=None):
     """The Health section of a morning report (wizard.report-section/1)."""
     args = args or {}
     now = now or dt.datetime.now(dt.timezone.utc)
     tz = _zone(args.get('tz'))
     report_date = _check_day(args.get('date'), 'date') or now.astimezone(tz).date().isoformat()
-    settle = REPORT_SETTLE_H
-    if args.get('settle_h') not in (None, ''):
-        settle = max(0.0, min(float(args['settle_h']), 6.0))
+    settle = _settle_h(args)
     base = {'id': APP_ID, 'title': 'Health', 'link': PREFIX + '/', 'order': 20, 'wait': True,
             'updated': int(now.timestamp()), 'final': False, 'lines': []}
     out = {'report': 1, 'app': APP_ID, 'date': report_date, 'sections': []}
@@ -1036,10 +1093,12 @@ def report_section(args, now=None):
         return out  # nothing connected: a quiet report, no section
     frm = (dt.date.fromisoformat(report_date) - dt.timedelta(days=29)).isoformat()
     days = {d['date']: d for d in days_list({'from': frm, 'to': report_date}).get('days') or [] if d.get('date')}
+    wake = wake_info(dict(args, date=report_date), now=now, days=days)
+    out['wake'] = wake   # additive (0.16): the wake signal, also on its own at GET /api/wake
     pick = next((k for k in sorted(days, reverse=True) if _night_scored(days[k])), None)
     s = daily_summary({'day': pick}) if pick else {}
     if not pick or s.get('day') != pick or not _night_scored(s):
-        out['sections'].append(dict(base, lines=['_No scored night yet._']))
+        out['sections'].append(dict(base, lines=['_No scored night yet._'], woke_at=wake['woke_at'], night_final=False))
         return out
     rec, sl = s['readiness'], s['sleep']
     rc = s.get('recovery_colour') or 'grey'
@@ -1062,11 +1121,7 @@ def report_section(args, now=None):
             {'name': 'Sleep', 'tones': [((days.get(k) or {}).get('sleep_band') or {}).get('colour') for k in strip_days]}]
     label, final = ('Last night' if pick == report_date else 'Latest scored'), False
     if pick == report_date:
-        try:
-            ended = dt.datetime.fromisoformat(str(sl['end']).replace('Z', '+00:00'))
-            final = (now - ended).total_seconds() >= settle * 3600
-        except ValueError:
-            final = False
+        final = wake['night_final']
         if not final:
             label = 'Last night so far'
     card = {'kind': 'health', 'v': 1, 'day': pick, 'label': label, 'link': PREFIX + '/', 'tiles': tiles,
@@ -1075,7 +1130,8 @@ def report_section(args, now=None):
         weekly = _weekly_sleep_lines(report_date, list(days.values()), tz)
     except Exception:
         weekly = []
-    out['sections'].append(dict(base, card=card, lines=weekly, final=final, night_end=sl.get('end')))
+    out['sections'].append(dict(base, card=card, lines=weekly, final=final, night_end=sl.get('end'),
+                                woke_at=wake['woke_at'], night_final=final, final_at=wake['final_at']))
     return out
 
 
@@ -1169,6 +1225,10 @@ TOOLS = [
      'inputSchema': _RANGE, 'annotations': RO},
     {'name': 'health_status', 'description': "Which health sources Health reads (WHOOP, Oura, Fitbit, Polar, Withings or any other connector), whether each is connected (`state`: connected, stale, not_set_up, sign_in, needs_update, not_installed), which one is the main source (`primary`; the owner picks it in the Sources sheet when two or more are connected), whether it gives a recovery score (`has_readiness`), how fresh its data is (source last_sync, Health last_pull, latest day) and which connector apps exist. If nothing is connected, send the owner the connector app link it lists (e.g. [WHOOP](/wizard-whoop/)); setup happens only on that app's screen, never in chat.",
      'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}, 'annotations': RO},
+    {'name': 'health_wake', 'description': "When the owner woke up: the end of last night's main sleep for a day (default today in tz), straight from the wearable (`woke_at`, UTC ISO; `fell_asleep_at`), whether that night is scored (`night_scored`) and final (`night_final`: scored, ended at least `settle_minutes` ago and the source synced again since, so it will not grow). `final_at` = earliest time it can be final. woke_at is null until the source has that night. Use for 'when did I wake up', or to wait for the owner to be up.",
+     'inputSchema': {'type': 'object', 'properties': {'date': {'type': 'string', 'description': 'YYYY-MM-DD (default today)'},
+                                                      'tz': {'type': 'string', 'description': "IANA zone for 'today' (default UTC), e.g. Asia/Bangkok"}},
+                     'additionalProperties': False}, 'annotations': RO},
 ]
 
 
@@ -1185,6 +1245,8 @@ def call(name, a):
         return workouts(a)
     if name == 'health_status':
         return status_info()
+    if name == 'health_wake':
+        return wake_info(a)
     raise KeyError(name)
 
 
@@ -1300,6 +1362,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, days_list(query))
             if path == '/api/report':
                 return self.send(200, report_section(query))
+            if path == '/api/wake':
+                return self.send(200, wake_info(query))
             if path == '/api/trends':
                 return self.send(200, trends(query))
             if path == '/api/workouts':

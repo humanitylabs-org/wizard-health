@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Health API",
-    "version": "0.10.1",
+    "version": "0.16.0",
     "description": "Box-local API of the Health app. It reads health-data connectors (docs/health-data-contract.md) and never holds provider keys."
   },
   "paths": {
@@ -293,7 +293,7 @@
     },
     "/api/report": {
       "get": {
-        "summary": "Morning report section (wizard.report-section/1): the Recovery and Sleep card for the newest scored night on or before `date`, a Monday 'Last 7 nights' look, and `final` once that night has settled.",
+        "summary": "Morning report section (wizard.report-section/1): the Recovery and Sleep card for the newest scored night on or before `date`, a Monday 'Last 7 nights' look, and `final` once that night has settled. Each section also carries `woke_at`, `night_final` and `final_at`; the top-level `wake` object is the same as GET /api/wake.",
         "parameters": [
           {
             "name": "date",
@@ -324,6 +324,50 @@
         "responses": {
           "200": {
             "description": "{report: 1, app, date, sections: [{id, title, lines, card, link, final, wait, updated, order}]}; empty sections when nothing is connected."
+          }
+        }
+      }
+    },
+    "/api/wake": {
+      "get": {
+        "summary": "The wake signal for a day: `woke_at` (end of last night's main sleep, from the wearable), `fell_asleep_at`, `night_scored`, `night_final` (scored, ended >= settle_minutes ago, source synced again since), `final_at`, `settle_minutes`, `source`, `checked_at`.",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Day (default: today in tz)"
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Owner's time zone, e.g. Asia/Bangkok"
+          },
+          {
+            "name": "settle_h",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            },
+            "description": "Override the settle time in hours (0-6)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wake info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
