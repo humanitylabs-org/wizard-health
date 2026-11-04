@@ -33,7 +33,11 @@
       <section id="screen" class="hl-screen" hidden>
         <!-- The day shows only when a past day is picked, with one way back to today. The sources dot sits in the corner. -->
         <header class="hl-top">
-          <div class="hl-when-row" id="when" hidden><span class="hl-day" id="date"></span><button type="button" class="hl-today" id="today">Back to today</button></div>
+          <!-- Reply (newer Wizards only): the shown day as an unsent Chats draft for the agent; nothing is sent -->
+          <div class="hl-daybar" id="daybar" hidden>
+            <div class="hl-when-row" id="when" hidden><span class="hl-day" id="date"></span><button type="button" class="hl-today" id="today">Back to today</button></div>
+            <button type="button" class="wz-button secondary hl-sm hl-reply" id="reply" hidden>Reply</button>
+          </div>
           <button type="button" class="hl-srcdot" id="srcdot" aria-label="Sources" title="Sources"><i></i></button>
         </header>
         <!-- Activity, Recovery and Sleep: in a wide window one row, Activity half the width and Recovery and Sleep a quarter each;

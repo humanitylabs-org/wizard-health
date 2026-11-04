@@ -143,6 +143,73 @@
   const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
   const betterInk = (fill, inkA, inkB) => contrast(fill, inkA) >= contrast(fill, inkB) ? 'a' : 'b';
 
-  const W = { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, TARGET, targets, targetText, actMatch, actGuide, MATCH_SAY, matchSay, REC_SAY, TITLE, title, sleepSay, needGloss, recoveryVsSleep, contrast, betterInk };
+  // Reply: one day as plain text for an unsent Chats draft (WizardApp.nav.openContextDraft), so the owner can start a
+  // thread with his agent about it. The same words as the cards, plus the times and workouts the agent can act on.
+  // d = the day record the cards show; o = { date, label, past, source, readinessDate, usual: { hrv, rhr }, names, time }.
+  // Returns { id, title, message } inside the shell's limits; nothing is ever sent by the app.
+  const PLAIN = { readiness: 'recovery', load: 'activity', hrv_ms: 'heart rate variability', resting_hr_bpm: 'resting heart rate',
+    spo2_pct: 'blood oxygen', skin_temp_c: 'skin temperature', calories_kcal: 'calories' };
+  function dayContext(d, o) {
+    d = d || {}; o = o || {};
+    const L = [], hm = h => mins(h * 60), past = !!o.past;
+    const one = x => Number.isInteger(x) ? String(x) : (Math.round(x * 10) / 10).toFixed(1);
+    const time = typeof o.time === 'function' ? o.time : (iso => String(iso).slice(11, 16) + ' UTC');
+    const r = d.readiness || {}, score = r.score, sl = d.sleep || {}, ld = d.load || {};
+    L.push(`Health day: ${o.label || o.date} (${o.date}, id day-${o.date}${o.source ? ', from ' + o.source : ''}).`);
+    // Activity first, as on the screen
+    if (num(ld.value)) {
+      const m = actMatch(ld.value, score, ld), g = actGuide(ld.value, score, ld, past), rb = recBand(score);
+      const top = num(ld.max) ? 'out of ' + ld.max : String(ld.label || ld.unit || '').toLowerCase();
+      const tt = rb ? targetText(rb, ld) : '';
+      L.push(`Activity: ${one(ld.value)}${top ? ' ' + top : ''}` + (m ? ` (${m.word}${tt ? ', target ' + tt + ' from recovery' : ''})` : '') + '.'
+        + (g ? ' ' + g.text : m ? ' ' + matchSay(m, score, past) : ''));
+    } else L.push('Activity: none recorded.');
+    const move = [num(d.calories_kcal) && Math.round(d.calories_kcal) + ' kcal burned', num(d.steps) && Math.round(d.steps) + ' steps'].filter(Boolean);
+    if (move.length) L.push('Moving: ' + move.join(', ') + '.');
+    const ws = Array.isArray(d.workouts) ? d.workouts : [];
+    if (ws.length) {
+      L.push(`Workouts (${ws.length}):`);
+      for (const w of ws.slice(0, 12)) {
+        L.push('- ' + [w.sport || 'Workout', w.start && time(w.start) + (w.end ? '-' + time(w.end) : ''), num(w.minutes) && w.minutes + ' min',
+          num((w.load || {}).value) && 'activity ' + one(w.load.value), num(w.avg_hr_bpm) && 'average heart rate ' + Math.round(w.avg_hr_bpm) + ' bpm',
+          num(w.max_hr_bpm) && 'max ' + Math.round(w.max_hr_bpm) + ' bpm', num(w.calories_kcal) && Math.round(w.calories_kcal) + ' kcal',
+          num(w.distance_m) && (w.distance_m / 1000).toFixed(1) + ' km'].filter(Boolean).join(', '));
+      }
+    } else if (Array.isArray(d.workouts)) L.push('Workouts: none.');
+    // Recovery
+    const rb = recBand(score);
+    if (rb) {
+      L.push(`Recovery: ${Math.round(score)}% (${REC_WORD[rb]})${o.readinessDate && o.readinessDate !== o.date ? ', scored on ' + o.readinessDate : ''}. `
+        + REC_SAY[past ? 'past' : 'now'][rb] + ((s => s ? ' ' + s : '')(recoveryVsSleep(score, sl.asleep_h, sl.need_h, past))));
+    } else L.push('Recovery: no score' + (o.noScoreFrom ? ' (' + o.noScoreFrom + ' does not give one)' : ' yet') + '.');
+    const u = o.usual || {}, vs = (v, uu, f) => num(uu) ? ` (usual ${f(uu)})` : '';
+    const heart = [num(d.hrv_ms) && 'Heart rate variability (HRV) ' + Math.round(d.hrv_ms) + ' ms' + vs(d.hrv_ms, u.hrv, x => Math.round(x)),
+      num(d.resting_hr_bpm) && 'resting heart rate ' + Math.round(d.resting_hr_bpm) + ' bpm' + vs(d.resting_hr_bpm, u.rhr, x => Math.round(x)),
+      num(d.spo2_pct) && 'blood oxygen ' + d.spo2_pct.toFixed(1) + '%', num(d.skin_temp_c) && 'skin temperature ' + d.skin_temp_c.toFixed(1) + ' \u00b0C',
+      num(d.respiratory_rate) && 'breathing ' + one(d.respiratory_rate) + ' per minute'].filter(Boolean);
+    if (heart.length) L.push('Heart overnight: ' + heart.join(', ') + '.');
+    // Sleep
+    if (num(sl.asleep_h)) {
+      const sb = sleepBand(sl.asleep_h, sl.need_h), need = num(sl.need_h) && sl.need_h > 0;
+      const pu = sl.need_parts || {}, um = num(pu.usual_h) ? Math.round(pu.usual_h * 60) : null;
+      L.push(`Sleep: ${hm(sl.asleep_h)} asleep` + (need ? ` of ${hm(sl.need_h)} needed (${Math.round(100 * sl.asleep_h / sl.need_h)}%` : ' (')
+        + `${need ? ', ' : ''}${SLEEP_WORD[sb]}).` + (need ? ' ' + sleepSay(Math.round(sl.asleep_h * 60), Math.round(sl.need_h * 60), um) : ''));
+      const g = need ? needGloss(Math.round(sl.need_h * 60), um) : '';
+      if (g) L.push('Need: ' + g + '.');
+      const when = [sl.start && 'fell asleep ' + time(sl.start), sl.end && 'woke ' + time(sl.end), num(sl.in_bed_h) && hm(sl.in_bed_h) + ' in bed'].filter(Boolean);
+      if (when.length) L.push('Night: ' + when.join(', ') + '.');
+      const st = [['Deep', sl.deep_h], ['Dreaming (REM)', sl.rem_h], ['Light', sl.light_h], ['Awake', sl.awake_h]].filter(p => num(p[1]));
+      if (st.length) L.push('Stages: ' + st.map(p => p[0] + ' ' + hm(p[1])).join(', ') + '.');
+      const naps = Array.isArray(sl.naps) ? sl.naps.filter(n => num(n.asleep_h)) : [];
+      if (naps.length) L.push('Naps: ' + naps.map(n => hm(n.asleep_h) + (n.start ? ' at ' + time(n.start) : '')).join(', ') + '.');
+    } else L.push('Sleep: none recorded for this night.');
+    // Metrics another source filled because the main source had none that day
+    const names = o.names || {}, fill = Object.entries(d.origins || {}).filter(([, s]) => s && d.source && s !== d.source);
+    if (fill.length) L.push('Filled from other sources: ' + fill.map(([k, s]) => (PLAIN[k] || k.replace(/_/g, ' ')) + ' from ' + (names[s] || s)).join(', ') + '.');
+    L.push(`More in the Health app's tools (health_days, health_sleep, health_workouts for ${o.date}).`);
+    return { id: ('day-' + o.date).replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 128), title: ('Health: ' + (o.label || o.date)).slice(0, 200), message: L.join('\n').slice(0, 32000) };
+  }
+
+  const W = { num, recBand, REC_WORD, sleepBand, SLEEP_WORD, actWord, TARGET, targets, targetText, actMatch, actGuide, MATCH_SAY, matchSay, REC_SAY, TITLE, title, sleepSay, needGloss, recoveryVsSleep, contrast, betterInk, dayContext };
   if (typeof module === 'object' && module.exports) module.exports = W; else root.HealthWords = W;
 })(typeof window !== 'undefined' ? window : globalThis);
