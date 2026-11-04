@@ -4,7 +4,7 @@ id: wizard-health
 name: Health
 type: view
 category: app
-version: 0.15.1
+version: 0.16.0
 summary: Your recovery, sleep and activity from your wearables, each in one plain sentence, every day as a square like a GitHub graph.
 tags: [data]
 license: GPL-3.0-only
@@ -51,4 +51,4 @@ In a wide window all three sit in one row, Activity (the one to act on) half the
 
 A dot in the corner shows how fresh your sources are and opens them.
 
-Health reads every connector app that fills the `health-data` spot (contract `wizard.health-data/1`, see `docs/health-data-contract.md`): WHOOP, Oura, Fitbit, Polar, Withings or any other, with no change to Health. Sources lists each one (connected, behind, or not set up with a **Set up** link to its own app). With two or more connected you pick the **main** source; each day uses its numbers, and anything it missed that day comes from another wearable with a small "from Oura" note. Activity targets follow each wearable's own scale. A wearable that gives no recovery score shows "No score from …", never a made-up one. Connecting happens in each connector's own app; Health never asks for a wearable's keys. It keeps its own copy of the days it has read, so the screen and your agent stay fast, and other apps (such as a morning report) can read the daily summary at `GET /api/summary`. The Morning Report reads its Health section from `GET /api/report` (shared report-section format), which says whether last night is final yet, so the report can wait for you to wake before its final version.
+Health reads every connector app that fills the `health-data` spot (contract `wizard.health-data/1`, see `docs/health-data-contract.md`): WHOOP, Oura, Fitbit, Polar, Withings or any other, with no change to Health. Sources lists each one (connected, behind, or not set up with a **Set up** link to its own app). With two or more connected you pick the **main** source; each day uses its numbers, and anything it missed that day comes from another wearable with a small "from Oura" note. Activity targets follow each wearable's own scale. A wearable that gives no recovery score shows "No score from …", never a made-up one. Connecting happens in each connector's own app; Health never asks for a wearable's keys. It keeps its own copy of the days it has read, so the screen and your agent stay fast, and other apps (such as a morning report) can read the daily summary at `GET /api/summary`. The Morning Report reads its Health section from `GET /api/report` (shared report-section format), which says when you woke (`woke_at`, straight from your wearable) and whether last night is final yet (about 30 minutes after you wake), so the report can turn final as soon as you are up. Agents ask the same with `health_wake`.

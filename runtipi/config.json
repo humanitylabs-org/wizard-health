@@ -10,8 +10,8 @@
     "media"
   ],
   "description": "A health tracker over the wearables you connect (WHOOP, Oura, Fitbit, Polar, Withings, Garmin, Coros, Apple Health). Activity, Recovery and Sleep each get a card in one traffic-light colour with a big number and one plain sentence (tap it for the numbers behind it), above a GitHub-style graph of every day; tap a day to see it. Wide windows show all three side by side; on a phone a bottom bar switches between Activity and Recovery & sleep. Health reads connector apps through the health-data contract and never holds a wearable's keys. Your agent gets read-only tools for the same data.",
-  "tipi_version": 22,
-  "version": "0.15.1",
+  "tipi_version": 23,
+  "version": "0.16.0",
   "source": "https://github.com/oscarhenrycollins/wizard-health",
   "exposable": false,
   "supported_architectures": [
@@ -19,7 +19,7 @@
     "arm64"
   ],
   "created_at": 1793380828795,
-  "updated_at": 1793763344408,
+  "updated_at": 1793769286093,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,

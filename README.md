@@ -15,8 +15,8 @@ Health never talks to a provider and never takes keys. It reads connector apps t
 ## Interfaces
 
 - Screen: `/wizard-health/`
-- HTTP API (see `openapi.json`): `GET /api/status`, `/api/summary[?day=&source=]` (daily summary for other apps such as a morning report), `/api/days`, `/api/trends?days=7|30|90`, `/api/workouts`, `/api/sleep`, `/api/report?date=&tz=` (its Morning Report section in the shared `wizard.report-section/1` format: the Recovery and Sleep card, a Monday "Last 7 nights" look, and `final` once last night has settled, i.e. scored and ended at least `HEALTH_REPORT_SETTLE_H` = 1.5 h ago; spec: oscarhenrycollins/morning-report `docs/report-section.md`); `POST /api/refresh`, `/api/primary`, `/api/forget`.
-- MCP (`POST /mcp`, box-only): `health_daily_summary`, `health_days`, `health_trends`, `health_sleep`, `health_workouts`, `health_status`.
+- HTTP API (see `openapi.json`): `GET /api/status`, `/api/summary[?day=&source=]` (daily summary for other apps such as a morning report), `/api/days`, `/api/trends?days=7|30|90`, `/api/workouts`, `/api/sleep`, `/api/wake?date=&tz=` (the wake signal: `woke_at` = last night's sleep end from the wearable, `night_final`, `final_at`), `/api/report?date=&tz=` (its Morning Report section in the shared `wizard.report-section/1` format: the Recovery and Sleep card, a Monday "Last 7 nights" look, and `final`/`night_final` once last night has settled, i.e. scored, ended at least `HEALTH_WAKE_SETTLE_MIN` = 30 min ago (`HEALTH_REPORT_SETTLE_H` still overrides) and the source synced again since, plus `woke_at` and a top-level `wake` object; spec: oscarhenrycollins/morning-report `docs/report-section.md`); `POST /api/refresh`, `/api/primary`, `/api/forget`.
+- MCP (`POST /mcp`, box-only): `health_daily_summary`, `health_days`, `health_trends`, `health_sleep`, `health_workouts`, `health_status`, `health_wake`.
 
 ## Development
 

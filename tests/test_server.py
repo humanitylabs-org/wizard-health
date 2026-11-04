@@ -271,9 +271,9 @@ class HealthTest(unittest.TestCase):
         self.assertEqual(http(self.port, 'POST', '/api/refresh', {})[0], 200)
         code, body = http(self.port, 'POST', '/mcp', {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})
         names = [t['name'] for t in json.loads(body)['result']['tools']]
-        self.assertEqual(names, ['health_daily_summary', 'health_days', 'health_trends', 'health_sleep', 'health_workouts', 'health_status'])
+        self.assertEqual(names, ['health_daily_summary', 'health_days', 'health_trends', 'health_sleep', 'health_workouts', 'health_status', 'health_wake'])
         for name, args in [('health_daily_summary', {}), ('health_daily_summary', {'day': '2026-10-01'}), ('health_days', {'from': '2026-10-01'}),
-                           ('health_trends', {'days': 7}), ('health_sleep', {}), ('health_workouts', {}), ('health_status', {})]:
+                           ('health_trends', {'days': 7}), ('health_sleep', {}), ('health_workouts', {}), ('health_status', {}), ('health_wake', {'date': '2026-10-20'})]:
             code, body = http(self.port, 'POST', '/mcp', {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': name, 'arguments': args}})
             self.assertFalse(json.loads(body)['result']['isError'], (name, body[:300]))
         code, _ = http(self.port, 'POST', '/mcp', {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/list'}, {'X-Forwarded-For': '100.1.1.1'})
@@ -292,7 +292,7 @@ class HealthTest(unittest.TestCase):
         self.whoop.change(END.isoformat(), readiness={'score': 80, 'band': 'high', 'state': 'scored', 'calibrating': False})
         S.pull_all(force=True)
         q = {'date': END.isoformat(), 'tz': 'Asia/Bangkok'}
-        r = S.report_section(q, now=dt.datetime(2026, 10, 20, 8, 0, tzinfo=utc))       # night ended 07:30Z, 30 min ago
+        r = S.report_section(q, now=dt.datetime(2026, 10, 20, 7, 50, tzinfo=utc))      # night ended 07:30Z, 20 min ago
         self.assertEqual((r['report'], r['app'], r['date']), (1, 'wizard-health', END.isoformat()))
         sec = r['sections'][0]
         self.assertEqual((sec['id'], sec['title'], sec['link'], sec['wait'], sec['final']), ('wizard-health', 'Health', '/wizard-health/', True, False))
@@ -302,6 +302,11 @@ class HealthTest(unittest.TestCase):
         self.assertEqual(sec['card']['tiles'][1]['value'], '7h 0m')
         self.assertEqual(len(sec['card']['strip']['days']), 7)
         self.assertEqual(sec['lines'], [])                                               # a Tuesday: no weekly look
+        self.assertEqual((sec['woke_at'], sec['night_final'], sec['final_at']), ('2026-10-20T07:30:00.000Z', False, '2026-10-20T08:00:00.000Z'))
+        self.assertEqual(r['wake']['woke_at'], '2026-10-20T07:30:00.000Z')
+        r = S.report_section(q, now=dt.datetime(2026, 10, 20, 8, 0, tzinfo=utc))        # 0.16: 30 min settle, not 1.5 h
+        self.assertTrue(r['sections'][0]['final'])
+        self.assertTrue(r['sections'][0]['night_final'])
         r = S.report_section(q, now=dt.datetime(2026, 10, 20, 9, 30, tzinfo=utc))       # 2 h later: final
         self.assertTrue(r['sections'][0]['final'])
         self.assertEqual(r['sections'][0]['card']['label'], 'Last night')
@@ -316,6 +321,41 @@ class HealthTest(unittest.TestCase):
         self.assertEqual(json.loads(body)['sections'][0]['id'], 'wizard-health')
         self.assertEqual(http(self.port, 'GET', '/wizard-health/api/report?date=2026-10-20')[0], 200)
         self.assertEqual(http(self.port, 'GET', '/api/report?date=20-10-2026')[0], 400)
+
+    def test_9_wake_signal(self):
+        """0.16 wake signal: woke_at straight from the source's sleep end; night_final once scored, settled (30 min)
+        and the source synced again after the settle; GET /api/wake and the health_wake tool."""
+        S, utc = self.S, dt.timezone.utc
+        day = END.isoformat()
+        self.whoop.change(day, readiness={'score': 80, 'band': 'high', 'state': 'scored', 'calibrating': False})
+        self.whoop.last_sync = '2026-10-20T07:40:00.000Z'          # last synced 10 min after waking
+        S.pull_all(force=True)
+        w = S.wake_info({'date': day}, now=dt.datetime(2026, 10, 20, 8, 30, tzinfo=utc))
+        self.assertEqual((w['woke_at'], w['fell_asleep_at'], w['night_scored'], w['settle_minutes'], w['source']),
+                         ('2026-10-20T07:30:00.000Z', '2026-10-20T00:00:00.000Z', True, 30, 'wizard-whoop'))
+        self.assertFalse(w['night_final'])                           # nobody has looked since the settle ended
+        self.assertEqual(w['checked_at'], '2026-10-20T07:40:00.000Z')
+        self.whoop.last_sync = '2026-10-20T08:05:00.000Z'
+        S.pull_all(force=True)
+        w = S.wake_info({'date': day}, now=dt.datetime(2026, 10, 20, 8, 6, tzinfo=utc))
+        self.assertTrue(w['night_final'])                            # 36 min after waking, not 1.5 h
+        self.assertFalse(S.wake_info({'date': day, 'settle_h': '1.5'}, now=dt.datetime(2026, 10, 20, 8, 6, tzinfo=utc))['night_final'])
+        # a night that is in but not scored yet: woke_at known, not final
+        self.whoop.change(day, readiness={'score': None, 'band': None, 'state': 'pending', 'calibrating': False})
+        S.pull_all(force=True)
+        w = S.wake_info({'date': day}, now=dt.datetime(2026, 10, 20, 12, 0, tzinfo=utc))
+        self.assertEqual((w['woke_at'], w['night_scored'], w['night_final']), ('2026-10-20T07:30:00.000Z', False, False))
+        # no record for the day yet: nothing known
+        w = S.wake_info({'date': '2026-10-21'}, now=dt.datetime(2026, 10, 21, 1, 0, tzinfo=utc))
+        self.assertEqual((w['woke_at'], w['night_final'], w['final_at']), (None, False, None))
+        code, body = http(self.port, 'GET', '/api/wake?date=2026-10-20&tz=Asia/Bangkok')
+        self.assertEqual((code, json.loads(body)['woke_at']), (200, '2026-10-20T07:30:00.000Z'))
+        self.assertEqual(http(self.port, 'GET', '/wizard-health/api/wake?date=bad')[0], 400)
+        code, body = http(self.port, 'POST', '/mcp', {'jsonrpc': '2.0', 'id': 9, 'method': 'tools/call',
+                                                     'params': {'name': 'health_wake', 'arguments': {'date': day}}})
+        self.assertEqual(json.loads(body)['result']['structuredContent']['woke_at'], '2026-10-20T07:30:00.000Z')
+        self.whoop.change(day, readiness={'score': 80, 'band': 'high', 'state': 'scored', 'calibrating': False})
+        S.pull_all(force=True)
 
     def test_6_empty_state(self):
         """No connector reachable and nothing held: the screen gets the connector apps to open."""
