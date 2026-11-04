@@ -57,7 +57,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* top: the sources dot in the corner; the day and Back to today only while a past day is shown */
 .hl-top { display: contents; }
-.hl-when-row { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 40px 0 2px; }
+.hl-daybar { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 40px 0 2px; }
+.hl-when-row { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+.hl-reply { margin-left: auto; }
 .hl-day { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-2); }
 .hl-today { min-height: 32px; padding: 0 14px; border: 1px solid var(--line-2, var(--line)); border-radius: var(--r-pill); background: var(--fill-2, var(--fill)); color: var(--ink); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
 .hl-srcdot { position: absolute; z-index: 2; top: -8px; right: -12px; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; }
@@ -243,7 +245,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .hl-expand { min-height: 44px; margin: -10px 0 -10px; }
   .hl-expand[aria-expanded="true"] { min-height: 44px; min-width: 88px; justify-content: center; }
   .hl-today { min-height: 44px; padding: 0 16px; }
-  .hl-when-row { min-height: 48px; }
+  .hl-when-row, .hl-daybar { min-height: 48px; }
   .hl-sm { min-height: 44px; padding: 0 16px; }
   html .hl-sheet .wz-sheet-x { width: 44px; height: 44px; margin: -10px -10px 0 8px; }
 }

@@ -778,6 +778,54 @@ class PresenceTest(unittest.TestCase):
         self.assertEqual(len(self.oldest()), 2)
 
 
+class ReplyTest(unittest.TestCase):
+    """Reply: the shown day as an unsent Chats draft (web/words.js dayContext, run in node; app.js wiring)."""
+    words = Path(__file__).resolve().parent.parent / 'web' / 'words.js'
+
+    def run_js(self, expr):
+        return WordsTest.run_js(self, expr)
+
+    def test_reply_day_context(self):
+        # Reply: one day as plain text for an unsent Chats draft; the id stays inside the shell's [A-Za-z0-9_-]{1,128}
+        day = {'date': '2026-11-03', 'source': 'wizard-whoop', 'readiness': {'score': 51}, 'hrv_ms': 41.2, 'resting_hr_bpm': 56,
+               'spo2_pct': 96.4, 'skin_temp_c': 33.41, 'calories_kcal': 1840.6, 'steps': 4012,
+               'load': {'value': 5.84, 'max': 21, 'scale_max': 21, 'label': 'Strain'},
+               'sleep': {'asleep_h': 6 + 20 / 60, 'need_h': 583 / 60, 'need_parts': {'usual_h': 456 / 60}, 'deep_h': 1.5, 'rem_h': 1.25,
+                         'light_h': 3.5, 'awake_h': 0.5, 'in_bed_h': 6.9, 'start': '2026-11-02T18:20:00Z', 'end': '2026-11-03T01:12:00Z'},
+               'workouts': [{'sport': 'Running', 'start': '2026-11-03T10:00:00Z', 'end': '2026-11-03T10:42:00Z', 'minutes': 42,
+                             'load': {'value': 9.8}, 'avg_hr_bpm': 148, 'distance_m': 7210}],
+               'origins': {'steps': 'wizard-oura'}}
+        c = self.run_js("W.dayContext(" + json.dumps(day) + ", {date: '2026-11-03', label: 'Tue, Nov 3', past: true, source: 'WHOOP',"
+                        " names: {'wizard-oura': 'Oura'}, usual: {hrv: 48, rhr: 54}})")
+        self.assertEqual(c['id'], 'day-2026-11-03')
+        self.assertEqual(c['title'], 'Health: Tue, Nov 3')
+        m = c['message']
+        self.assertTrue(m.startswith('Health day: Tue, Nov 3 (2026-11-03, id day-2026-11-03, from WHOOP).'))
+        for need in ('Activity: 5.8 out of 21 (Room to push, target 10\u201314 from recovery). 4.2 short of your target.',
+                     '- Running, 10:00 UTC-10:42 UTC, 42 min, activity 9.8, average heart rate 148 bpm, 7.2 km',
+                     'Recovery: 51% (So-so). Partly recovered. A normal day was fine. Your heart coped, but short sleep held this back.',
+                     'Heart rate variability (HRV) 41 ms (usual 48), resting heart rate 56 bpm (usual 54), blood oxygen 96.4%',
+                     'Sleep: 6h 20m asleep of 9h 43m needed (65%, Short). 3h 23m short: 1h 16m under a normal night',
+                     'Need: usual 7h 36m + 2h 7m catch-up.', 'Night: fell asleep 18:20 UTC, woke 01:12 UTC, 6h 54m in bed.',
+                     'Stages: Deep 1h 30m, Dreaming (REM) 1h 15m, Light 3h 30m, Awake 30m.', 'Moving: 1841 kcal burned, 4012 steps.',
+                     'Filled from other sources: steps from Oura.'):
+            self.assertIn(need, m)
+        # an empty day still reads, and nothing outside the limits
+        e = self.run_js("W.dayContext({}, {date: '2026-11-04'})")
+        self.assertIn('Activity: none recorded.', e['message']); self.assertIn('Sleep: none recorded', e['message'])
+        self.assertRegex(e['id'], r'^[A-Za-z0-9_-]{1,128}$')
+
+    def test_reply_wiring(self):
+        js = (ROOT / 'web' / 'app.js').read_text(); html = (ROOT / 'web' / 'index.html').read_text()
+        self.assertIn('>Reply</button>', html)
+        self.assertIn("typeof window.WizardApp?.nav?.openContextDraft === 'function'", js)
+        self.assertIn("receipt?.kind !== 'unsent-draft' || receipt.sent !== false", js)
+        handler = js[js.index("el('reply').onclick"):js.index('// ---------- the sources sheet')]
+        self.assertNotIn('await', handler)                  # the draft opens synchronously inside the tap
+        for gone in ('openThread', 'sessions', '/runs'):
+            self.assertNotIn(gone, js)
+
+
 class ViewTest(unittest.TestCase):
     """The one-screen view: picker, one focus card, the graph; every pop-up is the one sheet; band colours never use bare --danger."""
     web = Path(__file__).resolve().parent.parent / 'web'

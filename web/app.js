@@ -328,6 +328,7 @@ function renderFocus() {
   const iso = shown(); if (!iso) return;
   el('date').textContent = dayName(iso);
   el('when').hidden = !sel;
+  renderReply(iso);
   for (const m of METRICS) focusPanel(P[m], iso);
   for (const b of el('metric').children) b.setAttribute('aria-checked', String(b.dataset.m === METRIC));
   for (const m of METRICS) P[m].root.classList.toggle('is-on', TAB[METRIC].includes(m));
@@ -529,6 +530,40 @@ function setMetric(m) {
   if (!wide()) el('main').scrollTop = 0;
 }
 
+// ---------- Reply: the shown day as an unsent Chats draft (the shell's shared capability; the app never sends) ----------
+// Only on Wizards whose shell offers it (one release works everywhere; older shells just show no Reply).
+const canReply = () => typeof window.WizardApp?.nav?.openContextDraft === 'function';
+function renderReply(iso) {
+  el('reply').hidden = !canReply() || !rec4(iso);
+  el('daybar').hidden = el('reply').hidden && el('when').hidden;
+}
+// The day's text is built from what is already on screen, so the draft opens synchronously inside the tap.
+function replyContext(iso) {
+  const d = rec4(iso); if (!d) return null;
+  const clock = t => { const x = new Date(t); return isNaN(x) ? String(t) : x.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }); };
+  const names = Object.assign({}, (SUM && SUM.source_names) || {}, d.source_names || {});
+  for (const x of (ST && ST.sources) || []) names[x.id] = x.name;
+  return window.HealthWords.dayContext(d, {
+    date: iso, label: noon(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+    past: !!sel, source: d.source ? srcName(d.source) : '', names, time: clock, noScoreFrom: noScoreFrom(d),
+    readinessDate: SUM && SUM.day === iso ? SUM.readiness_date : iso,
+    usual: { hrv: usual(hrv, iso), rhr: usual(x => (x || {}).resting_hr_bpm, iso) },
+  });
+}
+el('reply').onclick = () => {
+  try {
+    const nav = window.WizardApp && WizardApp.nav;
+    if (!nav || typeof nav.openContextDraft !== 'function') throw new Error('Context draft unavailable');
+    const ctx = replyContext(shown());
+    if (!ctx) throw new Error('No data for this day yet. Nothing sent.');
+    const receipt = nav.openContextDraft(ctx);
+    if (receipt?.kind !== 'unsent-draft' || receipt.sent !== false) throw new Error('Could not confirm an unsent draft. Nothing was sent.');
+    say('Draft opened in Chats with this item attached. Nothing sent.', 'note');
+  } catch (e) {
+    say(e.message === 'Context draft unavailable' ? 'Reload Wizard (refresh the whole page) to turn on Reply. Nothing sent.' : (e.message || 'Could not open Chats. Nothing sent.'), 'error');
+  }
+};
+
 // ---------- the sources sheet (the one dialog, WzSheet closes it five ways) ----------
 function openSheet(title, nodes, kind = '') {
   const d = el('sheet');
@@ -678,7 +713,7 @@ function goBack() {
   if (!window.WizardApp || WizardApp.version !== 1) {
     say('Wizard system functions are unavailable. Open Health through Wizard.', 'error');
   } else {
-    WizardApp.ready({ name: 'wizard-health', version: '0.16.0' });
+    WizardApp.ready({ name: 'wizard-health', version: '0.16.1' });
     WizardApp.back.register({ canGoBack: canBack, back: goBack });
   }
   if (loadCache()) renderAll();
