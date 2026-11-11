@@ -4,7 +4,7 @@ id: wizard-health
 name: Health
 type: view
 category: app
-version: 0.16.1
+version: 0.16.2
 summary: Your recovery, sleep and activity from your wearables, each in one plain sentence, every day as a square like a GitHub graph.
 tags: [data]
 license: GPL-3.0-only
@@ -35,6 +35,9 @@ system: false
 uses: [health-data]
 needs: []
 health: /healthz
+switches:
+  contract: wizard.app-switches/1
+  path: /api/switches
 ---
 
 # Health
