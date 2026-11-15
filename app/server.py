@@ -41,7 +41,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent if '__file__' in globals() else Path(os.environ.get('APP_ROOT', '.')).resolve()
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'wizard-health'
-VERSION = '0.16.2'
+VERSION = '0.16.3'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8826')
 CONTRACT = 'wizard.health-data/1'
@@ -1078,6 +1078,26 @@ def wake_info(args=None, now=None, days=None):
     return out
 
 
+def _activity_tile(day, days, pick):
+    """0.16.3 (Miguel, 15 Nov 2026): the morning report shows the last FINISHED day's activity (the day before the
+    report), judged against that day's recovery: did he hit the target. Today's activity has barely started."""
+    d = days.get(day) or {}
+    am = d.get('activity_match') or {}
+    v = (d.get('load') or {}).get('value')
+    when = '' if day == pick else 'yesterday · '
+    if not am:
+        return {'name': 'Activity', 'value': f'{v:.1f}' if _num(v) else '–', 'word': 'No data', 'tone': 'grey',
+                'note': (when + 'no recovery score to judge it').strip(' ·') if _num(v) else (when + 'not recorded').strip(' ·')}
+    s, lo, hi, tgt = am['strain'], am['target_low'], am['target_high'], am['target'].replace('-', '–')
+    if am['side'] == 'under' and lo:
+        note = f'{lo - s:.1f} short of {tgt}'
+    elif am['side'] == 'over':
+        note = f'{s - hi:.1f} over {tgt}'
+    else:
+        note = f'target {tgt}'
+    return {'name': 'Activity', 'value': f'{s:.1f}', 'word': am['word'], 'tone': am['colour'], 'note': when + note}
+
+
 def report_section(args, now=None):
     """The Health section of a morning report (wizard.report-section/1)."""
     args = args or {}
@@ -1110,6 +1130,9 @@ def report_section(args, now=None):
          'note': (f"{sb['pct_of_need']}% of {_report_hm(sl['need_h'])} needed" if sb.get('pct_of_need') is not None and sl.get('need_h')
                   else None)},
     ]
+    show_activity = switch_on('report-yesterday-activity')
+    if show_activity:
+        tiles.append(_activity_tile((dt.date.fromisoformat(report_date) - dt.timedelta(days=1)).isoformat(), days, pick))
     text = str(s.get('text') or '')
     hrv = re.search(r'HRV ([\d.]+) ms', text)
     rhr = re.search(r'resting HR (\d+) bpm', text)
@@ -1119,6 +1142,9 @@ def report_section(args, now=None):
     strip_days = [(end - dt.timedelta(days=6 - i)).isoformat() for i in range(7)]
     rows = [{'name': 'Recovery', 'tones': [(days.get(k) or {}).get('recovery_colour') for k in strip_days]},
             {'name': 'Sleep', 'tones': [((days.get(k) or {}).get('sleep_band') or {}).get('colour') for k in strip_days]}]
+    if show_activity:   # 0.16.3: finished days only; the report's own day is still running, so its square stays empty
+        rows.append({'name': 'Activity', 'tones': [((days.get(k) or {}).get('activity_match') or {}).get('colour')
+                                                   if k < report_date else None for k in strip_days]})
     label, final = ('Last night' if pick == report_date else 'Latest scored'), False
     if pick == report_date:
         final = wake['night_final']
@@ -1431,7 +1457,12 @@ import threading as _sw_threading
 from pathlib import Path as _SwPath
 from urllib.parse import urlsplit as _sw_urlsplit
 
-SWITCHES = []
+SWITCHES = [
+    {'id': 'report-yesterday-activity', 'name': "Yesterday's activity in the morning report",
+     'description': "The Health card in the morning report adds an Activity tile for yesterday (strain vs that day's "
+                    "recovery target: did you hit it) and an Activity row in the 7-day strip. Today is never shown.",
+     'default': False, 'issues': ['humanitylabs-org/wizard-health#5']},
+]
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')
 _SW_LOCAL = {'localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'}

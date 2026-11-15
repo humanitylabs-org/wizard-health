@@ -322,6 +322,33 @@ class HealthTest(unittest.TestCase):
         self.assertEqual(http(self.port, 'GET', '/wizard-health/api/report?date=2026-10-20')[0], 200)
         self.assertEqual(http(self.port, 'GET', '/api/report?date=20-10-2026')[0], 400)
 
+    def test_8b_report_yesterday_activity(self):
+        """0.16.3: behind switch report-yesterday-activity the card adds yesterday's Activity tile and an Activity strip row
+        (finished days only); off by default the card is unchanged."""
+        S, utc = self.S, dt.timezone.utc
+        S.pull_all(force=True)
+        nxt = (END + dt.timedelta(days=1)).isoformat()
+        q = {'date': nxt, 'tz': 'Asia/Bangkok'}
+        card = S.report_section(q, now=dt.datetime(2026, 10, 21, 9, 0, tzinfo=utc))['sections'][0]['card']
+        self.assertEqual([t['name'] for t in card['tiles']], ['Recovery', 'Sleep'])
+        self.assertEqual([r['name'] for r in card['strip']['rows']], ['Recovery', 'Sleep'])
+        orig = S.switch_on
+        S.switch_on = lambda i: i == 'report-yesterday-activity'
+        try:
+            card = S.report_section(q, now=dt.datetime(2026, 10, 21, 9, 0, tzinfo=utc))['sections'][0]['card']
+        finally:
+            S.switch_on = orig
+        act = card['tiles'][-1]
+        self.assertEqual(act['name'], 'Activity')
+        self.assertIn(act['tone'], ('green', 'yellow', 'red', 'grey'))
+        row = card['strip']['rows'][-1]
+        self.assertEqual(row['name'], 'Activity')
+        self.assertEqual(len(row['tones']), 7)
+        for day, tone in zip(card['strip']['days'], row['tones']):
+            if day >= nxt:
+                self.assertIsNone(tone)
+        self.assertIn('report-yesterday-activity', [x['id'] for x in S.SWITCHES])
+
     def test_9_wake_signal(self):
         """0.16 wake signal: woke_at straight from the source's sleep end; night_final once scored, settled (30 min)
         and the source synced again after the settle; GET /api/wake and the health_wake tool."""
