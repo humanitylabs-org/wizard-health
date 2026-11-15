@@ -348,6 +348,14 @@ class HealthTest(unittest.TestCase):
             if day >= nxt:
                 self.assertIsNone(tone)
         self.assertIn('report-yesterday-activity', [x['id'] for x in S.SWITCHES])
+        S.switch_on = lambda i: i == 'report-yesterday-activity'
+        try:
+            today = S.report_section({'date': END.isoformat(), 'tz': 'Asia/Bangkok'},
+                                     now=dt.datetime(2026, 10, 20, 9, 30, tzinfo=utc))['sections'][0]['card']
+        finally:
+            S.switch_on = orig
+        if today['day'] == END.isoformat():
+            self.assertIn("Today's activity target:", today['line'])
 
     def test_9_wake_signal(self):
         """0.16 wake signal: woke_at straight from the source's sleep end; night_final once scored, settled (30 min)

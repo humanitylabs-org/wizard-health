@@ -41,7 +41,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent if '__file__' in globals() else Path(os.environ.get('APP_ROOT', '.')).resolve()
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'wizard-health'
-VERSION = '0.16.3'
+VERSION = '0.16.4'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8826')
 CONTRACT = 'wizard.health-data/1'
@@ -1138,6 +1138,9 @@ def report_section(args, now=None):
     rhr = re.search(r'resting HR (\d+) bpm', text)
     heart = ', '.join(x for x in (f'HRV {hrv[1]} ms' if hrv else '', f'resting heart rate {rhr[1]} bpm' if rhr else '') if x)
     line = f"{_REC_PHRASE.get(rc, 'No recovery score')}, {_SLEEP_PHRASE.get(sb.get('word'), 'no sleep score')}." + (f' {heart[0].upper()}{heart[1:]}.' if heart else '')
+    today_am = (days.get(report_date) or {}).get('activity_match') or {}
+    if show_activity and pick == report_date and today_am.get('target'):   # 0.16.4: today's goal from this morning's recovery
+        line += f" Today's activity target: {(days.get(report_date) or {}).get('load', {}).get('label') or 'strain'} {today_am['target'].replace('-', '–')}."
     end = dt.date.fromisoformat(pick)
     strip_days = [(end - dt.timedelta(days=6 - i)).isoformat() for i in range(7)]
     rows = [{'name': 'Recovery', 'tones': [(days.get(k) or {}).get('recovery_colour') for k in strip_days]},
