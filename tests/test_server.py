@@ -1176,5 +1176,211 @@ class WordsTest(unittest.TestCase):
             self.assertEqual(R(*args), '', args)
 
 
+
+class ManualLogTest(unittest.TestCase):
+    """0.17 (switch manual-log, #8): Health works without a wearable. Days logged by hand or imported from a CSV fill the
+    same squares, cards and colours, marked where they came from; a connected wearable wins for a day it covers; agent
+    tools read them and can add one; with the switch off nothing of it shows and nothing is deleted."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(ROOT / 'app'))
+        import server
+        cls.S = S = importlib.reload(server)
+        cls.saved = (S.GRANTS_FILE, S.ENV_SOURCES, S.DATA, S.KNOWN, S.switch_on)
+        cls.tmp = Path(tempfile.mkdtemp())
+        cls.on = {'manual-log'}
+        S.switch_on = lambda i: i in cls.on
+        cls.app = serve(S.Handler)
+        cls.port = cls.app.server_address[1]
+        S.TRUSTED_HOSTS.add(f'127.0.0.1:{cls.port}')
+
+    @classmethod
+    def tearDownClass(cls):
+        S = cls.S
+        S.GRANTS_FILE, S.ENV_SOURCES, S.DATA, S.KNOWN, S.switch_on = cls.saved
+        S._PROBE.update(at=0, list=None)
+        cls.app.shutdown()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        """A fresh box with no wearable at all."""
+        S = self.S
+        self.on.clear(); self.on.add('manual-log')
+        S.DATA = self.tmp / ('data-' + self._testMethodName)
+        S.GRANTS_FILE, S.ENV_SOURCES = '/nonexistent', []
+        S.KNOWN = [dict(k, base='http://127.0.0.1:9') for k in self.saved[3]]
+        S._PROBE.update(at=0, list=None)
+
+    def week(self):
+        feels = ['ready', 'so-so', 'run-down', 'ready', 'so-so', 'ready', 'run-down']
+        for i in range(7):
+            d = (END - dt.timedelta(days=6 - i)).isoformat()
+            self.S.log_day({'date': d, 'sleep_h': [8, 6.5, 5, 7.5, '7:15', 9, 4][i], 'feel': feels[i],
+                            'activity_min': [60, 30, 10, 100, 0, 45, 50][i], 'weight_kg': 80 - i / 10, 'note': 'day %d' % i})
+
+    def test_1_fresh_box_logs_a_week_into_all_three_graphs(self):
+        S = self.S
+        st = S.status_info()
+        self.assertTrue(st['manual_log'])
+        self.assertEqual(st['sources'], [])                  # nothing yet: the empty screen (with Log a day)
+        self.assertFalse(S.daily_summary()['available'])
+        self.week()
+        st = S.status_info()
+        self.assertEqual([(s['id'], s['state'], s['days'], s['local'], s['primary']) for s in st['sources']],
+                         [('health-log', 'local', 7, True, True)])
+        self.assertFalse(st['connected'])                    # no wearable is claimed
+        days = S.days_list({})['days']
+        self.assertEqual(len(days), 7)
+        for d in days:   # every logged day has a colour in all three graphs
+            self.assertTrue(d['recovery_colour'] and d['sleep_band'] and d['activity_match'], d['date'])
+            self.assertEqual(d['source'], 'health-log')
+            self.assertEqual(d['source_names'], {'health-log': 'Logged by hand'})
+            self.assertEqual(d['readiness']['state'], 'scored')
+        by = {d['date']: d for d in days}
+        first, third = by[(END - dt.timedelta(days=6)).isoformat()], by[(END - dt.timedelta(days=4)).isoformat()]
+        self.assertEqual((first['recovery_colour'], first['sleep_band']['colour'], first['activity_match']['colour']), ('green', 'green', 'green'))
+        self.assertEqual(first['readiness']['felt'], 'ready')
+        self.assertEqual(first['activity_match']['target'], '45-90')        # active minutes, from how you felt
+        self.assertEqual((third['recovery_colour'], third['sleep_band']['colour'], third['activity_match']['word']), ('red', 'red', 'Right amount'))
+        self.assertEqual(by[(END - dt.timedelta(days=2)).isoformat()]['sleep']['asleep_h'], 7.25)    # 7:15
+        s = S.daily_summary()
+        self.assertTrue(s['available'])
+        self.assertEqual(s['day'], END.isoformat())
+        self.assertIn('felt run down (logged, not measured)', s['text'])
+        self.assertEqual(s['weight_kg'], 79.4)
+        self.assertEqual(s['note'], 'day 6')
+        tr = S.trends({'days': 7})
+        self.assertEqual(tr['days_with_data'], 7)
+        # the log form reads a day back; logging it again replaces it; delete removes it
+        self.assertEqual(S.logged_day({'date': END.isoformat()})['day']['note'], 'day 6')
+        S.log_day({'date': END.isoformat(), 'feel': 'Ready'})
+        got = S.logged_day({'date': END.isoformat()})['day']
+        self.assertEqual((got['readiness']['felt'], got.get('sleep'), got.get('note')), ('ready', None, None))
+        S.delete_logged({'date': END.isoformat()})
+        self.assertIsNone(S.logged_day({'date': END.isoformat()})['day'])
+        self.assertEqual(len(S.days_list({})['days']), 6)
+
+    def test_2_checks(self):
+        S = self.S
+        for bad in ({'date': '2026-13-01', 'feel': 'ready'}, {'feel': 'great'}, {'sleep_h': 30}, {'activity_min': -1},
+                    {'weight_kg': 5}, {'date': '2999-01-01', 'feel': 'ready'}, {'note': 7}, {}, {'date': END.isoformat()}):
+            with self.assertRaises(S.Problem, msg=bad):
+                S.log_day(bad)
+        self.assertEqual(S.log_day({'weight_lb': 176})['day']['weight_kg'], 79.8)
+        with self.assertRaises(S.Problem):
+            S.forget_source({'id': 'health-log'})
+
+    def test_3_import_csv(self):
+        S = self.S
+        csv_text = ('\ufeffDate,Sleep (hours),How you feel,Active minutes,Weight (kg),Notes\n'
+                    '2026-10-01,7.5,Ready,50,81.2,first\n'
+                    '2026-10-02,6,so-so,25,,\n'
+                    '2026-10-03,lots,Ready,10,,\n'
+                    '\n'
+                    '2026-10-04;;;\n')
+        r = S.import_csv({'csv': csv_text, 'name': 'my-days.csv'})
+        self.assertEqual((r['imported'], r['skipped_count'], r['from'], r['to']), (2, 2, '2026-10-01', '2026-10-02'))
+        self.assertEqual(r['skipped'][0]['row'], 4)
+        src = {s['id']: s for s in r['status']['sources']}
+        self.assertEqual(src['health-import']['name'], 'Imported file')
+        d = S.days_list({'from': '2026-10-01', 'to': '2026-10-02'})['days']
+        self.assertEqual([x['source'] for x in d], ['health-import', 'health-import'])
+        self.assertEqual(d[1]['entry'], {'how': 'file', 'file': 'my-days.csv'})
+        # semicolons work too; a header without a date column or without any known column is refused
+        r = S.import_csv({'csv': 'date;sleep;feel\n2026-10-05;8;run down\n'})
+        self.assertEqual(r['imported'], 1)
+        for bad in ('sleep,feel\n7,ready\n', 'date,steps\n2026-10-01,9000\n', ''):
+            with self.assertRaises(S.Problem):
+                S.import_csv({'csv': bad})
+        # hand-logged beats imported on the same day
+        S.log_day({'date': '2026-10-01', 'feel': 'run-down'})
+        d = S.days_list({'from': '2026-10-01', 'to': '2026-10-01'})['days'][0]
+        self.assertEqual((d['readiness']['felt'], d['origins']['readiness'], d['origins']['sleep']), ('run-down', 'health-log', 'health-import'))
+        S.delete_logged({'source': 'health-import'})
+        self.assertNotIn('health-import', {s['id'] for s in S.status_info()['sources']})
+
+    def test_4_wearable_wins_and_marks_the_rest(self):
+        S = self.S
+        whoop = Connector('wizard-whoop', 'WHOOP', 'whoop', 'Strain', 21, 3)
+        srv = serve(whoop.handler())
+        try:
+            g = self.tmp / 'grants-4.json'
+            g.write_text(json.dumps({'provider_endpoints_all': {'slot:health-data': {'wizard-whoop': f'http://127.0.0.1:{srv.server_address[1]}'}}}))
+            S.GRANTS_FILE = str(g)
+            S._PROBE.update(at=0, list=None)
+            S.pull_all(force=True)
+            S.log_day({'date': END.isoformat(), 'feel': 'run-down', 'sleep_h': 3, 'weight_kg': 70, 'note': 'sore'})
+            S.log_day({'date': (END - dt.timedelta(days=5)).isoformat(), 'feel': 'ready', 'activity_min': 60})   # before WHOOP's days
+            self.assertEqual(S.status_info()['primary'], 'wizard-whoop')
+            d = S.daily_summary({'day': END.isoformat()})
+            self.assertEqual(d['source'], 'wizard-whoop')
+            self.assertNotIn('felt', d['readiness'])                      # WHOOP's measured score wins
+            self.assertEqual(d['sleep']['asleep_h'], 7.0)
+            self.assertEqual((d['weight_kg'], d['note']), (70, 'sore'))   # what WHOOP lacks comes from the log, marked
+            self.assertEqual((d['origins']['weight_kg'], d['origins']['note']), ('health-log', 'health-log'))
+            self.assertEqual(d['source_names']['health-log'], 'Logged by hand')
+            old = S.days_list({'from': (END - dt.timedelta(days=5)).isoformat(), 'to': (END - dt.timedelta(days=5)).isoformat()})['days'][0]
+            self.assertEqual((old['origins']['readiness'], old['activity_match']['colour']), ('health-log', 'green'))
+            # the wearable's presence tracking never ages the log out
+            S.track_presence([])
+            self.assertEqual(S._source_rows()['health-log'].get('gone_since'), None)
+        finally:
+            srv.shutdown(); srv.server_close()
+
+    def test_5_switch_off_hides_and_keeps(self):
+        S = self.S
+        self.week()
+        self.on.clear()
+        st = S.status_info()
+        self.assertFalse(st['manual_log'])
+        self.assertEqual(st['sources'], [])
+        self.assertEqual(S.days_list({})['days'], [])
+        self.assertFalse(S.daily_summary()['available'])
+        with self.assertRaises(S.Problem):
+            S.log_day({'feel': 'ready'})
+        c = S.db()
+        try:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM days WHERE source='health-log'").fetchone()[0], 7)   # kept
+        finally:
+            c.close()
+        names = [x['name'] for x in S.rpc({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})['result']['tools']]
+        self.assertNotIn('health_log_day', names)
+        self.on.add('manual-log')
+        self.assertEqual(len(S.days_list({})['days']), 7)          # back as it was
+
+    def test_6_http_and_mcp(self):
+        S = self.S
+        code, body = http(self.port, 'POST', '/api/log', {'date': END.isoformat(), 'sleep_h': 8, 'feel': 'ready', 'activity_min': 50})
+        self.assertEqual(code, 200, body)
+        code, body = http(self.port, 'GET', '/api/log?date=' + END.isoformat())
+        self.assertEqual(json.loads(body)['day']['sleep']['asleep_h'], 8)
+        big = 'date,sleep,note\n' + ''.join(f'{(END - dt.timedelta(days=i)).isoformat()},7.{i % 10},from my old tracker\n' for i in range(1, 4000))
+        self.assertGreater(len(big), 65536)
+        code, body = http(self.port, 'POST', '/api/import', {'csv': big, 'name': 'long.csv'})
+        self.assertEqual((code, json.loads(body)['imported']), (200, 3999))
+        self.assertEqual(http(self.port, 'POST', '/api/log', {'feel': 'ready'}, {'Host': 'box.example.ts.net', 'Origin': 'https://evil.example'})[0], 403)
+        self.assertEqual(http(self.port, 'POST', '/api/forget', {'id': 'health-log'})[0], 409)
+        code, body = http(self.port, 'POST', '/api/log/delete', {'date': END.isoformat()})
+        self.assertEqual(code, 200)
+        names = [x['name'] for x in S.rpc({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})['result']['tools']]
+        self.assertEqual(names[-1], 'health_log_day')
+        tool = next(x for x in S.tools() if x['name'] == 'health_log_day')
+        self.assertFalse(tool['annotations']['readOnlyHint'])
+        r = S.rpc({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'health_log_day', 'arguments': {'date': END.isoformat(), 'feel': 'so-so', 'sleep_h': 6.5}}})
+        self.assertFalse(r['result']['isError'], r)
+        r = S.rpc({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'health_days', 'arguments': {'from': END.isoformat(), 'to': END.isoformat()}}})
+        day = r['result']['structuredContent']['days'][0]
+        self.assertEqual((day['readiness']['felt'], day['origins']['readiness'], day['origins']['sleep']), ('so-so', 'health-log', 'health-log'))
+        r = S.rpc({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call', 'params': {'name': 'health_log_day', 'arguments': {'feel': 'meh'}}})
+        self.assertTrue(r['result']['isError'])
+        self.on.clear()
+        r = S.rpc({'jsonrpc': '2.0', 'id': 5, 'method': 'tools/call', 'params': {'name': 'health_log_day', 'arguments': {'feel': 'ready'}}})
+        self.assertIn('error', r)
+        self.assertEqual(http(self.port, 'POST', '/api/log', {'feel': 'ready'})[0], 404)
+        sw = next(x for x in S.SWITCHES if x['id'] == 'manual-log')
+        self.assertEqual((sw['default'], sw['issues']), (False, ['humanitylabs-org/wizard-health#8']))
+
+
 if __name__ == '__main__':
     unittest.main()

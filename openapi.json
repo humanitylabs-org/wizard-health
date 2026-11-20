@@ -371,6 +371,183 @@
           }
         }
       }
+    },
+    "/api/log": {
+      "get": {
+        "summary": "The owner's hand-logged day for a date (switch manual-log)",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Switch manual-log is off"
+          }
+        }
+      },
+      "post": {
+        "summary": "Log (or replace) one day by hand (switch manual-log)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "sleep_h": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 24
+                  },
+                  "feel": {
+                    "type": "string",
+                    "enum": [
+                      "ready",
+                      "so-so",
+                      "run-down"
+                    ]
+                  },
+                  "activity_min": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1440
+                  },
+                  "weight_kg": {
+                    "type": "number"
+                  },
+                  "weight_lb": {
+                    "type": "number"
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Switch manual-log is off"
+          }
+        }
+      }
+    },
+    "/api/log/delete": {
+      "post": {
+        "summary": "Delete one hand-logged day, or every imported day (switch manual-log)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "health-log",
+                      "health-import"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Switch manual-log is off"
+          }
+        }
+      }
+    },
+    "/api/import": {
+      "post": {
+        "summary": "Import a CSV of daily rows (date + any of sleep_hours, feel, activity_minutes, weight_kg, note) as the Imported file source (switch manual-log)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "csv"
+                ],
+                "properties": {
+                  "csv": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Switch manual-log is off"
+          }
+        }
+      }
     }
   }
 }

@@ -28,6 +28,12 @@
         </a>
         <div class="hl-setups" id="setups" hidden></div>
         <i class="hl-wait" id="wait" hidden></i>
+        <!-- Switch manual-log: no wearable needed. Log a day by hand or import a CSV of daily rows -->
+        <div class="hl-setups hl-manual" id="manual-empty" hidden>
+          <p class="hl-note">No wearable? Log your sleep, how you feel and your activity by hand.</p>
+          <button type="button" class="wz-button" id="log-first">Log a day</button>
+          <button type="button" class="wz-button secondary" id="import-first">Import a file</button>
+        </div>
       </section>
 
       <section id="screen" class="hl-screen" hidden>
@@ -37,6 +43,8 @@
           <div class="hl-daybar" id="daybar" hidden>
             <div class="hl-when-row" id="when" hidden><span class="hl-day" id="date"></span><button type="button" class="hl-today" id="today">Back to today</button></div>
             <button type="button" class="wz-button secondary hl-sm hl-reply" id="reply" hidden>Reply</button>
+            <!-- Switch manual-log: log the shown day by hand -->
+            <button type="button" class="wz-button secondary hl-sm hl-logbtn" id="logbtn" hidden>Log</button>
           </div>
           <button type="button" class="hl-srcdot" id="srcdot" aria-label="Sources" title="Sources"><i></i></button>
         </header>
@@ -89,5 +97,7 @@
   </template>
   <!-- The one pop-up: the sources list behind the corner dot -->
   <dialog class="wz-sheet hl-sheet" id="sheet" aria-labelledby="sheet-h"><div id="sheet-body"></div></dialog>
+  <!-- Switch manual-log: the CSV picked for Import a file (read in the page, sent as text) -->
+  <input type="file" id="csvfile" accept=".csv,text/csv,text/plain" hidden>
 </body>
 </html>

@@ -178,7 +178,8 @@
     } else if (Array.isArray(d.workouts)) L.push('Workouts: none.');
     // Recovery
     const rb = recBand(score);
-    if (rb) {
+    if (rb && r.felt) L.push(`Recovery: felt ${REC_WORD[rb]} (logged by hand, not measured).`);
+    else if (rb) {
       L.push(`Recovery: ${Math.round(score)}% (${REC_WORD[rb]})${o.readinessDate && o.readinessDate !== o.date ? ', scored on ' + o.readinessDate : ''}. `
         + REC_SAY[past ? 'past' : 'now'][rb] + ((s => s ? ' ' + s : '')(recoveryVsSleep(score, sl.asleep_h, sl.need_h, past))));
     } else L.push('Recovery: no score' + (o.noScoreFrom ? ' (' + o.noScoreFrom + ' does not give one)' : ' yet') + '.');

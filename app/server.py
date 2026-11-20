@@ -62,6 +62,23 @@ KNOWN = [
     {'id': 'wizard-withings', 'name': 'Withings', 'base': 'http://wizard-withings:8834', 'app_path': '/wizard-withings/',
      'blurb': 'Sleep, heart and activity from your Withings devices.'},
 ]
+# 0.17 (switch manual-log, #8): days the owner logs by hand or imports from a file live in Health itself, as two local
+# sources. They fill the same squares, cards and colours as a wearable, always after every wearable (a connected
+# wearable wins each metric on a day it covers), and are never probed, pulled, aged out or purged.
+LOCAL = {
+    'health-log': {'name': 'Logged by hand', 'how': 'hand', 'blurb': 'Days you logged in Health.'},
+    'health-import': {'name': 'Imported file', 'how': 'file', 'blurb': 'Days imported from a CSV file.'},
+}
+# Active minutes judged against how you felt (the stand-in recovery): Ready 45-90 min, So-so 20-45, Run down under 20.
+LOCAL_LOAD = {'label': 'Active minutes', 'unit': 'min', 'min': 0, 'max': None, 'scale_max': 120,
+              'targets': {'high': [45, 90], 'medium': [20, 45], 'low': [0, 20]}, 'over_margin': 30}
+# How you feel -> the recovery band it stands for. The score only places the day in its band (Ready 67+, So-so
+# 34-66, Run down 0-33); `felt` says it was not measured, and the screen shows the word, never a percentage.
+FEEL = {'ready': (80, 'high'), 'so-so': (50, 'medium'), 'run-down': (20, 'low')}
+FEEL_ALIASES = {'ready': 'ready', 'good': 'ready', 'green': 'ready', 'so-so': 'so-so', 'soso': 'so-so', 'so so': 'so-so',
+                'ok': 'so-so', 'okay': 'so-so', 'yellow': 'so-so', 'run-down': 'run-down', 'run down': 'run-down',
+                'rundown': 'run-down', 'tired': 'run-down', 'bad': 'run-down', 'red': 'run-down'}
+MAX_IMPORT_BYTES = int(os.environ.get('HEALTH_MAX_IMPORT_BYTES', str(4 * 1024 * 1024)))
 STALE_HOURS = 3   # a connected source that has not synced for this long is shown as behind
 ENV_SOURCES = [s.split('=', 1) for s in os.environ.get('HEALTH_SOURCES', '').split(',') if '=' in s]
 PROBE_TTL = float(os.environ.get('HEALTH_PROBE_TTL', '90'))
@@ -171,9 +188,34 @@ def _get(base, path, params=None, timeout=10):
 
 
 def _rank(sid):
-    """Known connectors first, in KNOWN order; anything else after them, by id."""
+    """Known connectors first, in KNOWN order; anything else after them, by id; Health's own local sources last."""
+    if sid in LOCAL:
+        return (len(KNOWN) + 1 + list(LOCAL).index(sid), str(sid))
     i = next((n for n, k in enumerate(KNOWN) if k['id'] == sid), len(KNOWN))
     return (i, str(sid or ''))
+
+
+def manual_on():
+    return switch_on('manual-log')
+
+
+def _local_entry(sid):
+    """A local source in the shape of a probed one (status 'local': neither live nor off)."""
+    m = LOCAL[sid]
+    return {'id': sid, 'base': None, 'name': m['name'], 'provider': 'wizard-health', 'app_path': PREFIX + '/',
+            'contract_ok': True, 'status': 'local', 'local': True, 'account': None, 'dataset': None,
+            'last_sync': None, 'next_sync': None, 'error': None,
+            'scales': {'readiness': {'label': 'Recovery', 'min': 0, 'max': 100}, 'load': dict(LOCAL_LOAD)},
+            'has_readiness': True}
+
+
+def _live():
+    """Source id -> probe: every reachable connector, plus Health's own local sources while manual-log is on."""
+    live = {p['id']: p for p in probe_all()}
+    if manual_on():
+        for sid in LOCAL:
+            live[sid] = _local_entry(sid)
+    return live
 
 
 def candidates():
@@ -350,7 +392,7 @@ def is_gone(p):
 
 def hidden_sources(live=None):
     """Ids whose days Health holds but must not use right now: off (not set up / disconnected) or no longer found."""
-    live = live if live is not None else {p['id']: p for p in probe_all()}
+    live = live if live is not None else _live()
     with LOCK:
         c = db()
         try:
@@ -377,6 +419,8 @@ def track_presence(found, rows=None):
     rows = rows if rows is not None else _source_rows()
     back = set()
     for sid, row in rows.items():
+        if sid in LOCAL:          # Health's own days: never aged out
+            continue
         p = live.get(sid)
         if not is_gone(p):
             if row.get('gone_since'):
@@ -434,6 +478,9 @@ def _source_rows():
         try:
             rows = {r['id']: dict(r) for r in c.execute('SELECT * FROM sources')}
             for r in c.execute('SELECT source, COUNT(*) n, MIN(date) a, MAX(date) b FROM days GROUP BY source'):
+                if r['source'] in LOCAL and r['source'] not in rows:
+                    rows[r['source']] = {'id': r['source'], 'name': LOCAL[r['source']]['name'], 'status': None,
+                                         'last_pull': None, 'gone_since': None, 'local': True}
                 if r['source'] in rows:
                     rows[r['source']].update(days=r['n'], first_date=r['a'], last_date=r['b'])
             return rows
@@ -445,7 +492,7 @@ def primary_source(live=None, rows=None):
     """The main source the screen and tools use: the owner's pick, else the first connected source in KNOWN order
     (WHOOP, Oura, Fitbit, Polar, Withings, then any other), preferring one that already holds data."""
     rows = rows if rows is not None else _source_rows()
-    live = live if live is not None else {p['id']: p for p in probe_all()}
+    live = live if live is not None else _live()
     chosen = _setting('primary')
     # an owner's pick that is off right now is skipped (kept saved: it is the main source again once it is back)
     if chosen and (chosen in rows or chosen in live) and not is_gone(live.get(chosen)):
@@ -460,12 +507,14 @@ def primary_source(live=None, rows=None):
     with_data = [sid for sid in order if rows.get(sid, {}).get('days') and not is_gone(live.get(sid))]
     if with_data:
         return with_data[0]
-    return next((s for s in order if s in live), None)
+    return next((s for s in order if s in live and s not in LOCAL), None)
 
 
 def _state(status, installed, connected, last_sync):
     """The one word the Sources sheet shows: connected, stale (connected but behind), not_set_up, sign_in,
     needs_update, error or not_installed."""
+    if status == 'local':
+        return 'local'
     if not installed:
         return 'not_installed'
     if status == 'needs_update':
@@ -477,12 +526,14 @@ def _state(status, installed, connected, last_sync):
 
 def sources_info():
     """Every source Health knows (reachable now, or held from before) plus the connector apps it can use."""
-    live = {p['id']: p for p in probe_all()}
+    live = _live()
     rows = _source_rows()
     primary = primary_source(live, rows)
     out = []
     for sid in sorted(set(live) | set(rows), key=_rank):
         p, r = live.get(sid), rows.get(sid, {})
+        if sid in LOCAL and not (p and r.get('days')):
+            continue      # listed only while manual-log is on and it holds days (off: kept, never shown or offered for removal)
         off = is_gone(p)
         held = r.get('days', 0)
         # an off source's days are not used: report none, and when the held copy will be purged
@@ -508,7 +559,8 @@ def sources_info():
                     'last_pull': r.get('last_pull'), 'pull_error': r.get('pull_error'), 'error': base.get('error') if p else None,
                     'days': 0 if off else held, 'held_days': held, 'off_since': gone_at, 'purge_at': purge_at,
                     'first_date': None if off else r.get('first_date'), 'latest_date': None if off else r.get('last_date'),
-                    'scales': scales, 'has_readiness': base.get('has_readiness', _has_readiness(scales)), 'primary': sid == primary})
+                    'scales': scales, 'has_readiness': base.get('has_readiness', _has_readiness(scales)), 'primary': sid == primary,
+                    'local': sid in LOCAL})
     have = {s['id']: s for s in out}
     connectors = [{'id': k['id'], 'name': k['name'], 'app_path': k['app_path'], 'blurb': k['blurb'],
                    'installed': k['id'] in live, 'connected': bool(have.get(k['id'], {}).get('connected'))} for k in KNOWN]
@@ -532,6 +584,8 @@ def set_primary(body):
 def forget_source(body):
     """Remove a source that is no longer installed, with Health's copy of its days."""
     sid = str(body.get('id') or '')
+    if sid in LOCAL:
+        raise Problem(409, 'Delete logged or imported days in Health instead.')
     if sid in {p['id'] for p in probe_all(fresh=True)}:
         raise Problem(409, 'That source is still installed. Disconnect it in its own app first.')
     _exec('DELETE FROM days WHERE source=?', (sid,))
@@ -539,6 +593,191 @@ def forget_source(body):
     if _setting('primary') == sid:
         _setting('primary', clear=True)
     return status_info()
+
+
+# ---------------- days logged by hand or imported (switch manual-log, #8) ----------------
+
+def _need_manual():
+    if not manual_on():
+        raise Problem(404, 'Logging days by hand is not switched on.')
+
+
+def _opt_num(v, name, lo, hi):
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    if isinstance(v, str):
+        s = v.strip().replace(',', '.')
+        m = re.fullmatch(r'(\d{1,2}):(\d{2})', s)          # 7:30 = 7 h 30 min (sleep)
+        try:
+            v = int(m[1]) + int(m[2]) / 60 if m else float(s)
+        except ValueError:
+            raise Problem(400, f'{name} must be a number.') from None
+    if not _num(v) or not math.isfinite(v):
+        raise Problem(400, f'{name} must be a number.')
+    if not lo <= v <= hi:
+        raise Problem(400, f'{name} must be between {lo:g} and {hi:g}.')
+    return v
+
+
+def _feel(v):
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    f = FEEL_ALIASES.get(re.sub(r'[\s_]+', ' ', str(v).strip().lower()).replace(' - ', '-'))
+    if not f:
+        raise Problem(400, 'feel must be Ready, So-so or Run down.')
+    return f
+
+
+def _log_date(v):
+    d = _check_day(v, 'date') if v else _now().date().isoformat()
+    try:
+        day = dt.date.fromisoformat(d)
+    except ValueError:
+        raise Problem(400, 'date must be YYYY-MM-DD.') from None
+    if day > _now().date() + dt.timedelta(days=1) or day.year < 1900:
+        raise Problem(400, 'date must not be in the future.')
+    return d
+
+
+def local_day(date, sleep_h=None, feel=None, activity_min=None, weight_kg=None, note=None, how='hand', file=None):
+    """One day record in the health-data day shape, built from what the owner logged. Only what he gave is set."""
+    rec = {'date': date, 'updated_at': _iso(), 'entry': {'how': how}}
+    if file:
+        rec['entry']['file'] = str(file)[:120]
+    if sleep_h is not None:
+        rec['sleep'] = {'asleep_h': round(sleep_h, 2), 'state': 'scored', 'logged': True}
+    if feel:
+        score, band = FEEL[feel]
+        rec['readiness'] = {'score': score, 'band': band, 'state': 'scored', 'felt': feel}
+    if activity_min is not None:
+        rec['load'] = dict(LOCAL_LOAD, value=round(activity_min))
+    if weight_kg is not None:
+        rec['weight_kg'] = round(weight_kg, 1)
+    if note:
+        rec['note'] = note
+    return rec
+
+
+def _parse_entry(e, how='hand', file=None):
+    if not isinstance(e, dict):
+        raise Problem(400, 'Expected a day object.')
+    date = _log_date(e.get('date'))
+    note = e.get('note')
+    if note is not None and not isinstance(note, str):
+        raise Problem(400, 'note must be text.')
+    note = (note or '').strip()[:500] or None
+    weight = _opt_num(e.get('weight_kg'), 'weight_kg', 20, 400)
+    if weight is None and e.get('weight_lb') not in (None, ''):
+        weight = _opt_num(e.get('weight_lb'), 'weight_lb', 44, 880) * 0.45359237
+    rec = local_day(date, _opt_num(e.get('sleep_h'), 'sleep_h', 0, 24), _feel(e.get('feel')),
+                    _opt_num(e.get('activity_min'), 'activity_min', 0, 1440), weight, note, how, file)
+    if len(rec) <= 3:
+        raise Problem(400, 'Give at least one of sleep_h, feel, activity_min, weight_kg or note.')
+    return rec
+
+
+def _write_local(sid, recs):
+    with LOCK:
+        c = db()
+        try:
+            with c:
+                for r in recs:
+                    c.execute('INSERT OR REPLACE INTO days (source, date, data, pulled_at) VALUES (?,?,?,?)',
+                              (sid, r['date'], json.dumps(r, ensure_ascii=False), _iso()))
+        finally:
+            c.close()
+
+
+def log_day(body):
+    """Save (or replace) the owner's hand-logged day. Every field optional but one: sleep_h, feel
+    (ready/so-so/run-down), activity_min, weight_kg (or weight_lb), note. date defaults to today (UTC)."""
+    _need_manual()
+    rec = _parse_entry(body)
+    _write_local('health-log', [rec])
+    return {'ok': True, 'day': rec, 'status': status_info()}
+
+
+def logged_day(args):
+    """What the owner logged by hand for one date (for the log form), or null."""
+    _need_manual()
+    date = _log_date(args.get('date'))
+    got = _days('health-log', date, date, 1)
+    return {'date': date, 'day': got[0] if got else None}
+
+
+def delete_logged(body):
+    """Delete one hand-logged day (`source` health-log, the default) or every imported day (`source` health-import)."""
+    _need_manual()
+    sid = str(body.get('source') or 'health-log')
+    if sid not in LOCAL:
+        raise Problem(400, 'source must be health-log or health-import.')
+    if sid == 'health-log':
+        date = _log_date(body.get('date'))
+        _exec('DELETE FROM days WHERE source=? AND date=?', (sid, date))
+    else:
+        _exec('DELETE FROM days WHERE source=?', (sid,))
+    return {'ok': True, 'status': status_info()}
+
+
+# CSV headers Health understands (case, spaces and units in brackets ignored); the first column that matches wins.
+CSV_COLS = {
+    'date': ('date', 'day'),
+    'sleep_h': ('sleep_h', 'sleep_hours', 'sleep', 'hours_slept', 'asleep_h', 'asleep'),
+    'feel': ('feel', 'feeling', 'how_you_feel', 'how_i_feel', 'mood', 'recovery'),
+    'activity_min': ('activity_min', 'activity_minutes', 'activity', 'active_minutes', 'exercise_minutes', 'exercise'),
+    'weight_kg': ('weight_kg', 'weight', 'body_mass_kg'),
+    'weight_lb': ('weight_lb', 'weight_lbs'),
+    'note': ('note', 'notes', 'comment'),
+}
+
+
+def _col_key(h):
+    return re.sub(r'[^a-z0-9]+', '_', re.sub(r'\(.*?\)', '', str(h).lower())).strip('_')
+
+
+def import_csv(body):
+    """Import a CSV of daily rows (a header row, then one row per day) as the 'Imported file' source. A date imported
+    again replaces its row; other dates stay. Returns how many days were imported and the rows that were skipped."""
+    import csv
+    import io
+    _need_manual()
+    text, name = body.get('csv'), body.get('name')
+    if not isinstance(text, str) or not text.strip():
+        raise Problem(400, 'Send the file as text in csv.')
+    text = text.lstrip('\ufeff')
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=',;\t')
+    except csv.Error:
+        dialect = csv.excel
+    rows = list(csv.reader(io.StringIO(text), dialect))
+    if not rows:
+        raise Problem(400, 'The file is empty.')
+    head = [_col_key(h) for h in rows[0]]
+    idx = {}
+    for key, names in CSV_COLS.items():
+        i = next((head.index(n) for n in names if n in head), None)
+        if i is not None:
+            idx[key] = i
+    if 'date' not in idx:
+        raise Problem(400, 'The first row must name the columns, with a date column (YYYY-MM-DD).')
+    if len(idx) < 2:
+        raise Problem(400, 'No column Health knows: use sleep_hours, feel, activity_minutes, weight_kg or note.')
+    recs, skipped = {}, []
+    for n, row in enumerate(rows[1:], start=2):
+        if not any(c.strip() for c in row):
+            continue
+        e = {k: (row[i] if i < len(row) else '') for k, i in idx.items()}
+        try:
+            r = _parse_entry(e, how='file', file=name)
+        except Problem as err:
+            skipped.append({'row': n, 'error': err.message})
+            continue
+        recs[r['date']] = r
+    if len(recs) > 20000:
+        raise Problem(413, 'That file has more than 20,000 days.')
+    _write_local('health-import', list(recs.values()))
+    return {'ok': True, 'imported': len(recs), 'skipped': skipped[:50], 'skipped_count': len(skipped),
+            'from': min(recs) if recs else None, 'to': max(recs) if recs else None, 'status': status_info()}
 
 
 # ---------------- reading Health's copy ----------------
@@ -553,7 +792,7 @@ def _source_arg(args):
 def _view(args):
     """What a read covers: (main source, the sources in order whose days are merged). An explicit `source` reads that
     one source alone; otherwise the main source, with any metric it lacks on a day filled from the other sources."""
-    live = {p['id']: p for p in probe_all()}
+    live = _live()
     off = hidden_sources(live)
     if args.get('source'):
         sid = _source_arg(args)
@@ -611,7 +850,8 @@ def _latest_date(sid):
 # value is a number. A metric the main source lacks is taken whole from the first other source that has it.
 _SECTION = {'readiness': 'score', 'sleep': 'asleep_h', 'load': 'value'}
 MERGE_KEYS = ('readiness', 'hrv_ms', 'resting_hr_bpm', 'spo2_pct', 'skin_temp_c', 'skin_temp_delta_c', 'respiratory_rate',
-              'sleep', 'load', 'calories_kcal', 'energy_kj', 'avg_hr_bpm', 'max_hr_bpm', 'steps', 'workouts')
+              'sleep', 'load', 'calories_kcal', 'energy_kj', 'avg_hr_bpm', 'max_hr_bpm', 'steps', 'workouts',
+              'weight_kg', 'note')
 
 
 def _present(key, v):
@@ -619,6 +859,8 @@ def _present(key, v):
         return isinstance(v, dict) and _num(v.get(_SECTION[key]))
     if key == 'workouts':
         return isinstance(v, list)
+    if key == 'note':
+        return isinstance(v, str) and bool(v.strip())
     return _num(v)
 
 
@@ -657,7 +899,7 @@ _LOAD_KEYS = ('max', 'scale_max', 'targets', 'over_margin', 'unit')
 
 def _load_scales(ids):
     """Source id -> its scales.load (from the live probe, else what Health stored from the last one)."""
-    live = {p['id']: p for p in probe_all()}
+    live = _live()
     rows = _source_rows()
     out = {}
     for sid in ids:
@@ -859,7 +1101,9 @@ def _with_meta(d, names):
 
 _PLAIN = {'readiness': 'recovery', 'load': 'activity', 'hrv_ms': 'HRV', 'resting_hr_bpm': 'resting HR', 'spo2_pct': 'blood oxygen',
           'skin_temp_c': 'skin temp', 'skin_temp_delta_c': 'skin temp change', 'respiratory_rate': 'breathing rate',
-          'calories_kcal': 'calories', 'energy_kj': 'energy', 'avg_hr_bpm': 'average HR', 'max_hr_bpm': 'max HR'}
+          'calories_kcal': 'calories', 'energy_kj': 'energy', 'avg_hr_bpm': 'average HR', 'max_hr_bpm': 'max HR',
+          'weight_kg': 'weight'}
+_FELT_WORD = {'ready': 'ready', 'so-so': 'so-so', 'run-down': 'run down'}
 
 
 def daily_summary(args=None):
@@ -900,7 +1144,9 @@ def daily_summary(args=None):
     parts = []
     rd = d.get('readiness') or {}
     nofrom = _no_score_from(d, info)
-    if rd.get('score') is not None:
+    if rd.get('felt'):
+        parts.append(f"felt {_FELT_WORD.get(rd['felt'], rd['felt'])} (logged, not measured)")
+    elif rd.get('score') is not None:
         parts.append(f"{lb['readiness']} {rd['score']:g}%" + (f" ({rd['band']})" if rd.get('band') else '') +
                      (f", HRV {d['hrv_ms']:g} ms" if d.get('hrv_ms') is not None else '') +
                      (f", resting HR {d['resting_hr_bpm']:g} bpm" if d.get('resting_hr_bpm') is not None else ''))
@@ -932,7 +1178,7 @@ def daily_summary(args=None):
                 spo2_pct=d.get('spo2_pct'), skin_temp_c=d.get('skin_temp_c'), skin_temp_delta_c=d.get('skin_temp_delta_c'),
                 respiratory_rate=d.get('respiratory_rate'), sleep=d.get('sleep'), load=d.get('load'),
                 calories_kcal=d.get('calories_kcal'), avg_hr_bpm=d.get('avg_hr_bpm'), max_hr_bpm=d.get('max_hr_bpm'),
-                steps=d.get('steps'), workouts=d.get('workouts') or [],
+                steps=d.get('steps'), workouts=d.get('workouts') or [], weight_kg=d.get('weight_kg'), note=d.get('note'),
                 recovery_colour=m['recovery_colour'], sleep_band=m['sleep_band'], activity_match=m['activity_match'],
                 origins=d['origins'], filled=d.get('filled') or [], source_names=m['source_names'], no_readiness_from=nofrom,
                 text=('; '.join(parts) + '.') if parts else 'Not scored yet.')
@@ -1124,8 +1370,9 @@ def report_section(args, now=None):
     rc = s.get('recovery_colour') or 'grey'
     sb = s.get('sleep_band') or {}
     tiles = [
-        {'name': 'Recovery', 'value': f"{rec['score']:.0f}%", 'word': _REC_WORD.get(rc, 'No data'), 'tone': rc,
-         'note': 'from your heart overnight'},
+        {'name': 'Recovery', 'value': _REC_WORD.get(rc, '–') if rec.get('felt') else f"{rec['score']:.0f}%",
+         'word': _REC_WORD.get(rc, 'No data'), 'tone': rc,
+         'note': 'how you felt (logged)' if rec.get('felt') else 'from your heart overnight'},
         {'name': 'Sleep', 'value': _report_hm(sl['asleep_h']), 'word': sb.get('word') or 'No data', 'tone': sb.get('colour') or 'grey',
          'note': (f"{sb['pct_of_need']}% of {_report_hm(sl['need_h'])} needed" if sb.get('pct_of_need') is not None and sl.get('need_h')
                   else None)},
@@ -1230,7 +1477,7 @@ def status_info():
     info = sources_info()
     return {'app': APP_ID, 'version': VERSION, 'primary': info['primary'], 'sources': info['sources'],
             'connectors': info['connectors'], 'connected': any(s['connected'] for s in info['sources']),
-            'choose_primary': info['choose_primary']}
+            'choose_primary': info['choose_primary'], 'manual_log': manual_on()}
 
 
 # ---------------- MCP ----------------
@@ -1259,6 +1506,18 @@ TOOLS = [
                                                       'tz': {'type': 'string', 'description': "IANA zone for 'today' (default UTC), e.g. Asia/Bangkok"}},
                      'additionalProperties': False}, 'annotations': RO},
 ]
+# 0.17 (switch manual-log): the agent may add a logged day. A write tool: it reaches an agent only when the owner
+# ticked Health for it (the gateway's tick list), and is listed only while the switch is on.
+LOG_TOOL = {'name': 'health_log_day', 'description': "Log one day by hand in Health (for days no wearable covers, or with no wearable at all): date (YYYY-MM-DD, default today), sleep_h (hours asleep), feel (ready, so-so or run-down: how the owner feels, which stands in for recovery), activity_min (active minutes), weight_kg, note. Give at least one. It replaces what was logged for that date and fills the same squares and cards as wearable data, marked 'Logged by hand'; a connected wearable still wins any metric it has that day. Only when the owner asked.",
+            'inputSchema': {'type': 'object', 'properties': {'date': {'type': 'string', 'description': 'YYYY-MM-DD (default today)'},
+                                                             'sleep_h': {'type': 'number'}, 'feel': {'type': 'string', 'enum': ['ready', 'so-so', 'run-down']},
+                                                             'activity_min': {'type': 'number'}, 'weight_kg': {'type': 'number'},
+                                                             'note': {'type': 'string'}}, 'additionalProperties': False},
+            'annotations': {'readOnlyHint': False, 'destructiveHint': False}}
+
+
+def tools():
+    return TOOLS + ([LOG_TOOL] if manual_on() else [])
 
 
 def call(name, a):
@@ -1276,6 +1535,9 @@ def call(name, a):
         return status_info()
     if name == 'health_wake':
         return wake_info(a)
+    if name == 'health_log_day' and manual_on():
+        out = log_day(a)
+        return {'ok': True, 'day': out['day']}
     raise KeyError(name)
 
 
@@ -1289,7 +1551,7 @@ def rpc(msg):
         if m == 'initialize':
             r = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': APP_ID, 'version': VERSION}}
         elif m == 'tools/list':
-            r = {'tools': TOOLS}
+            r = {'tools': tools()}
         elif m == 'tools/call':
             try:
                 v = call(p.get('name'), p.get('arguments') or {})
@@ -1356,11 +1618,11 @@ class Handler(BaseHTTPRequestHandler):
         p = urlsplit(self.path).path
         return '/' if p == PREFIX else p[len(PREFIX):] if p.startswith(PREFIX + '/') else p
 
-    def body(self):
+    def body(self, cap=65536):
         if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
             raise Problem(415, 'Use application/json.')
         size = int(self.headers.get('Content-Length', '0') or 0)
-        if not 0 <= size <= 65536:
+        if not 0 <= size <= cap:
             raise Problem(413, 'Request too large.')
         try:
             d = json.loads(self.rfile.read(size) or b'{}')
@@ -1399,6 +1661,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, workouts(query))
             if path == '/api/sleep':
                 return self.send(200, sleep_list(query))
+            if path == '/api/log':
+                return self.send(200, logged_day(query))
             if path == '/openapi.json':
                 return self.send(200, (ROOT / 'openapi.json').read_bytes())
             name = 'index.html' if path == '/' else path[1:]
@@ -1421,7 +1685,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(403, {'error': 'MCP is box-only.'})
                 out = rpc(self.body())
                 return self.send(202 if out is None else 200, out)
+            if path == '/api/import':
+                return self.send(200, import_csv(self.body(MAX_IMPORT_BYTES)))
             b = self.body()
+            if path == '/api/log':
+                return self.send(200, log_day(b))
+            if path == '/api/log/delete':
+                return self.send(200, delete_logged(b))
             if path == '/api/refresh':
                 pull_all(fresh_probe=True, force=True)
                 return self.send(200, status_info())
@@ -1465,6 +1735,11 @@ SWITCHES = [
      'description': "The Health card in the morning report adds an Activity tile for yesterday (strain vs that day's "
                     "recovery target: did you hit it) and an Activity row in the 7-day strip. Today is never shown.",
      'default': False, 'issues': ['humanitylabs-org/wizard-health#5']},
+    {'id': 'manual-log', 'name': 'Log days by hand or import a file',
+     'description': "Health works without a wearable: log a day by hand (sleep hours, how you feel, active minutes, "
+                    "weight, a note) or import a CSV of daily rows. Those days fill the same squares, cards and colours, "
+                    "marked where they came from; a connected wearable wins for a day it covers. Your agent can log a day too.",
+     'default': False, 'issues': ['humanitylabs-org/wizard-health#8']},
 ]
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')

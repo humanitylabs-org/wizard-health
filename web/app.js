@@ -82,10 +82,14 @@ const fresh = src => live(src) && src.last_sync && Date.now() - new Date(src.las
 const stateOf = x => x.state || (!x.installed ? 'not_installed' : x.status === 'needs_update' ? 'needs_update'
   : live(x) ? (fresh(x) ? 'connected' : 'stale') : x.status === 'not_configured' ? 'not_set_up' : x.status === 'needs_login' ? 'sign_in' : 'error');
 const srcOf = id => (ST && ST.sources.find(x => x.id === id)) || null;
+// Switch manual-log: days the owner logged by hand or imported live in Health itself, as two local sources.
+const manualOn = () => !!(ST && ST.manual_log);
+const LOCAL_NOTE = { 'health-log': 'Logged by hand', 'health-import': 'From your imported file' };
 const srcName = id => (srcOf(id) || {}).name || (SUM && SUM.source_names && SUM.source_names[id]) || id;
 // A metric another source filled because the main source had none that day: its tiny origin note.
 function fromNote(d, key) {
   const o = d && d.origins && d.origins[key];
+  if (o && LOCAL_NOTE[o] && o !== d.source) return LOCAL_NOTE[o];   // a logged value filling a wearable's day says so
   return o && d.source && o !== d.source ? 'from ' + srcName(o) : '';
 }
 // No readiness score because no source of this day gives one: name it ("No score from Oura"); never invent a score.
@@ -103,6 +107,9 @@ const shown = () => sel || newest();
 // The record for a date: the summary for its own day (it fills an unscored newest day from the last scored one).
 const rec4 = iso => (SUM && SUM.available && SUM.day === iso) ? SUM : BY[iso] || null;
 const recov = d => ((d || {}).readiness || {}).score;
+const felt = d => ((d || {}).readiness || {}).felt || null;
+const FELT_SAY = { now: { hi: 'You feel ready. A good day to push.', md: 'You feel so-so. A normal day is fine.', lo: 'You feel run down. Take it easy today.' },
+  past: { hi: 'You felt ready that day.', md: 'You felt so-so that day.', lo: 'You felt run down that day.' } };
 const sleepH = d => ((d || {}).sleep || {}).asleep_h;
 const needH = d => ((d || {}).sleep || {}).need_h;
 // The usual night inside the need (the rest is catch-up for earlier short nights), when the source splits it.
@@ -135,7 +142,8 @@ const SCALE = {
   recovery: {
     name: 'Recovery',
     cls: d => lightOf('recovery', d),
-    tip: d => num(recov(d)) ? 'Recovery ' + Math.round(recov(d)) + '%, ' + REC_WORD[recBand(recov(d))].toLowerCase() : null,
+    tip: d => !num(recov(d)) ? null : felt(d) ? 'Recovery: felt ' + REC_WORD[recBand(recov(d))].toLowerCase()
+      : 'Recovery ' + Math.round(recov(d)) + '%, ' + REC_WORD[recBand(recov(d))].toLowerCase(),
   },
   sleep: {
     name: 'Sleep',
@@ -160,6 +168,8 @@ function focusOf(metric, d, past) {
     const r = recov(d), b = recBand(r), none = noScoreFrom(d);
     if (!b && none) return { value: DASH, chip: 'No score from ' + none, say: none + ' does not give a recovery score.' };
     if (!b) return { value: DASH, say: 'Not scored yet. Your wearable scores it after you wake up.' };
+    // A logged day: how you felt stands in for recovery (the word, never a made-up percentage)
+    if (felt(d)) return { value: REC_WORD[b], chip: 'How you felt', say: FELT_SAY[past ? 'past' : 'now'][b] };
     return { value: Math.round(r) + '%', chip: REC_WORD[b], say: REC_SAY[past ? 'past' : 'now'][b], also: recoveryVsSleep(r, sleepH(d), needH(d), past) };
   }
   if (metric === 'sleep') {
@@ -215,12 +225,15 @@ function detailsOf(metric, d, iso) {
     [sel ? 'Target that day' : 'Target for today', rb && !actGuide(act(d), recov(d), loadOf(d)) ? targetText(rb, loadOf(d)) || null : null, rb ? 'from your recovery' : '', ''],
     ['Calories', num(d.calories_kcal) ? Math.round(d.calories_kcal).toLocaleString('en-US') + ' kcal' : null, 'burned all day', '', '', fromNote(d, 'calories_kcal')],
     ['Steps', num(d.steps) ? Math.round(d.steps).toLocaleString('en-US') : null, '', '', '', fromNote(d, 'steps')],
-    ['Workouts', !Object.keys(d).length || !Array.isArray(d.workouts) && d.source ? null : !ws.length ? 'None' : ws.length === 1 ? one(ws[0]) : ws.length + ': ' + ws.map(w => cap(w.sport) || 'Workout').join(', '), '', '', '', fromNote(d, 'workouts')],
+    ['Workouts', !Object.keys(d).length || !Array.isArray(d.workouts) && d.source || LOCAL_NOTE[d.source] && !(d.origins || {}).workouts ? null : !ws.length ? 'None' : ws.length === 1 ? one(ws[0]) : ws.length + ': ' + ws.map(w => cap(w.sport) || 'Workout').join(', '), '', '', '', fromNote(d, 'workouts')],
+    ['Weight', num(d.weight_kg) ? d.weight_kg.toFixed(1) + ' kg' : null, '', '', '', fromNote(d, 'weight_kg')],
+    ['Note', typeof d.note === 'string' && d.note.trim() ? d.note : null, '', '', '', fromNote(d, 'note')],
   ];
 }
 // The card's headline metric came from another source: one tiny note at the end of the details.
 const HEAD = { recovery: ['readiness', 'Score'], sleep: ['sleep', 'Sleep'], activity: ['load', 'Activity'] };
-function headFrom(m, d) { const [key, what] = HEAD[m], f = fromNote(d, key); return f ? what + ' ' + f : ''; }
+function headFrom(m, d) { const [key, what] = HEAD[m], f = fromNote(d, key), o = ((d || {}).origins || {})[key];
+  return !f ? '' : LOCAL_NOTE[o] ? f : what + ' ' + f; }
 function fillRows(dl, list) {
   dl.replaceChildren();
   // [name, value, gloss, vs usual, stage swatch, origin note ("from Oura": another source filled this value)]
@@ -300,10 +313,10 @@ function renderAll() {
   el('screen').hidden = !data;
   el('dock').hidden = !data;
   if (!data) { renderEmpty(); return; }
-  const p = primary(), ok = p && fresh(p);
+  const p = primary(), ok = p && (fresh(p) || p.local);
   const dot = el('srcdot');
   dot.className = 'hl-srcdot ' + (ok ? 'ok' : 'stale');
-  dot.setAttribute('aria-label', p ? `Sources: ${p.name} ${ok ? 'up to date' : live(p) ? 'synced ' + ago(p.last_sync) : (STATUS[p.status] || ['not connected'])[0].toLowerCase()}` : 'Sources');
+  dot.setAttribute('aria-label', p ? `Sources: ${p.name} ${p.local ? 'in Health' : ok ? 'up to date' : live(p) ? 'synced ' + ago(p.last_sync) : (STATUS[p.status] || ['not connected'])[0].toLowerCase()}` : 'Sources');
   if (sel && (!newest() || sel > newest())) sel = null;
   renderFocus();
   renderGraph();
@@ -323,6 +336,7 @@ function renderEmpty() {
   if (!apps.length && !ST.sources.some(live)) box.append(h('p', 'hl-note', 'Get ' + join(ST.connectors.map(c => c.name)).replace(' and ', ' or ') + ' from the App Store.'));
   box.hidden = !box.childElementCount;
   el('wait').hidden = !ST.sources.some(live);
+  el('manual-empty').hidden = !manualOn();
 }
 function renderFocus() {
   const iso = shown(); if (!iso) return;
@@ -338,7 +352,7 @@ function focusPanel(X, iso) {
   const F = focusOf(m, d, !!sel), T = title(m);
   q('tname').textContent = T.name;
   q('tgloss').textContent = T.gloss;
-  q('tsub').textContent = T.sub; q('tsub').hidden = !T.sub;
+  q('tsub').textContent = T.sub; q('tsub').hidden = !T.sub || !!felt(d);   // a logged feeling was not measured from the heart
   // The card wears the shown day's square class: same variable, same colour, never drifting.
   const card = q('hl-focus');
   card.className = 'hl-focus ' + (rec4(iso) ? SCALE[m].cls(d) : '');
@@ -535,7 +549,8 @@ function setMetric(m) {
 const canReply = () => typeof window.WizardApp?.nav?.openContextDraft === 'function';
 function renderReply(iso) {
   el('reply').hidden = !canReply() || !rec4(iso);
-  el('daybar').hidden = el('reply').hidden && el('when').hidden;
+  el('logbtn').hidden = !manualOn();
+  el('daybar').hidden = el('reply').hidden && el('when').hidden && el('logbtn').hidden;
 }
 // The day's text is built from what is already on screen, so the draft opens synchronously inside the tap.
 function replyContext(iso) {
@@ -575,7 +590,7 @@ function openSheet(title, nodes, kind = '') {
 }
 // Every connector Health found, with one word for its state; one not set up yet is a 'Set up' link to its own app
 // (Health never takes keys). With two or more connected, the owner picks the main source (saved server-side).
-const STATE = { connected: ['Connected', 'ok'], stale: ['Behind', 'stale'], not_set_up: ['Not set up', 'off'], sign_in: ['Sign in again', 'stale'],
+const STATE = { local: ['In Health', 'ok'], connected: ['Connected', 'ok'], stale: ['Behind', 'stale'], not_set_up: ['Not set up', 'off'], sign_in: ['Sign in again', 'stale'],
   needs_update: ['Needs an update', 'stale'], error: ['Not working', 'stale'], not_installed: ['Not installed', 'off'] };
 const join = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
 function openSources() {
@@ -592,13 +607,18 @@ function openSources() {
     const m = h('span', 'hl-src-main'), name = h('b', '', x.name + (x.account ? ' \u00b7 ' + x.account : ''));
     if (choose && x.primary) name.append(h('span', 'hl-main', 'Main'));
     m.append(name);
-    const line = st === 'connected' ? 'Synced ' + ago(x.last_sync) : st === 'stale' ? 'Behind \u00b7 synced ' + ago(x.last_sync)
+    const line = st === 'local' ? x.days + (x.days === 1 ? ' day' : ' days') + (x.id === 'health-log' ? ' logged by hand' : ' imported')
+      : st === 'connected' ? 'Synced ' + ago(x.last_sync) : st === 'stale' ? 'Behind \u00b7 synced ' + ago(x.last_sync)
       : st === 'not_installed' && x.days ? 'Not installed \u00b7 ' + x.days + ' days kept' : word;
     m.append(h('small', st === 'stale' || st === 'sign_in' || st === 'needs_update' || st === 'error' ? 'hl-warn' : '', line));
     if (st === 'needs_update') m.append(h('small', 'hl-warn', 'Update ' + x.name + ' or Health'));
     else if ((x.error || x.pull_error) && st !== 'not_set_up') m.append(h('small', 'hl-warn', x.error || x.pull_error));
     li.append(m);
     const a = h('span', 'hl-src-act');
+    if (st === 'local') {   // Log a day and Import a file sit under the list; imported days can be deleted here
+      if (x.id === 'health-import') { const b = h('button', 'wz-button secondary hl-sm', 'Delete'); b.type = 'button'; b.onclick = () => dropImport(b); a.append(b); }
+      li.append(a); list.append(li); continue;
+    }
     if (choose && x.connected && !x.primary) { const b = h('button', 'wz-button secondary hl-sm', 'Make main'); b.type = 'button'; b.onclick = () => setPrimary(x.id); a.append(b); }
     if (st === 'not_set_up') a.append(appLink('Set up', x.id, x.app_path, setupCls));
     else if (st === 'sign_in') a.append(appLink('Sign in', x.id, x.app_path, 'wz-button hl-sm'));
@@ -625,9 +645,100 @@ function openSources() {
     try { ST = await api('api/refresh', {}); await loadData(); renderAll(); openSources(); say('Up to date.', 'note'); }
     catch (err) { say(err.message, 'error'); rb.disabled = false; rb.textContent = 'Refresh'; }
   };
-  if (ST.sources.length) nodes.push(rb);
+  if (ST.sources.some(x => !x.local)) nodes.push(rb);
+  if (manualOn()) nodes.push(manualRow());
   openSheet('Sources', nodes, 'src');
 }
+
+// ---------- switch manual-log: log a day by hand, or import a CSV of daily rows ----------
+function manualRow() {
+  const row = h('div', 'hl-log-act');
+  const lb = h('button', 'wz-button secondary', 'Log a day'); lb.type = 'button'; lb.onclick = () => openLog(shown());
+  const ib = h('button', 'wz-button secondary', 'Import a file'); ib.type = 'button'; ib.onclick = pickFile;
+  row.append(lb, ib);
+  return row;
+}
+const FEELS = [['ready', 'Ready'], ['so-so', 'So-so'], ['run-down', 'Run down']];
+function field(label, input, hint) {
+  const l = h('label', '', label); if (hint) l.append(h('small', '', hint)); l.append(input); return l;
+}
+function numInput(name, value, step, max, ph) {
+  const i = h('input', 'wz-field'); i.type = 'number'; i.name = name; i.inputMode = 'decimal'; i.min = '0'; i.max = String(max); i.step = String(step);
+  if (ph) i.placeholder = ph; if (num(value)) i.value = String(value); return i;
+}
+// One screen, a few taps: the day, sleep hours, how you feel, active minutes, weight and a note. Every field optional
+// but one; saving a day again replaces what was logged for it.
+async function openLog(iso) {
+  const today = localIso(new Date());
+  const day = iso && iso <= today ? iso : today;
+  let got = null;
+  try { got = (await api('api/log?date=' + day)).day; } catch (e) { say(e.message, 'error'); return; }
+  const sl = (got || {}).sleep || {}, ld = (got || {}).load || {}, fe = ((got || {}).readiness || {}).felt || null;
+  const form = h('form', 'hl-log'); form.noValidate = true;
+  const date = h('input', 'wz-field'); date.type = 'date'; date.name = 'date'; date.value = day; date.max = today;
+  date.onchange = () => { if (/^\d{4}-\d{2}-\d{2}$/.test(date.value)) openLog(date.value); };
+  let feel = fe;
+  const seg = h('div', 'hl-seg'); seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', 'How you feel');
+  for (const [v, w] of FEELS) {
+    const b = h('button', '', w); b.type = 'button'; b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(v === feel));
+    b.onclick = () => { feel = feel === v ? null : v; for (const c of seg.children) c.setAttribute('aria-checked', String(c === b && feel === v)); };
+    seg.append(b);
+  }
+  const sleep = numInput('sleep_h', sl.asleep_h, 0.25, 24, 'e.g. 7.5');
+  const actv = numInput('activity_min', ld.value, 5, 1440, 'e.g. 30');
+  const wt = numInput('weight_kg', (got || {}).weight_kg, 0.1, 400, 'optional');
+  const note = h('input', 'wz-field'); note.type = 'text'; note.name = 'note'; note.maxLength = 500; note.placeholder = 'optional'; note.value = (got || {}).note || '';
+  const feelBox = h('div', 'hl-log-feel'); feelBox.append(h('span', '', 'How you feel'), seg);
+  feelBox.setAttribute('role', 'group');
+  const act = h('div', 'hl-log-act');
+  const save = h('button', 'wz-button', 'Save'); save.type = 'submit';
+  act.append(save);
+  if (got) { const del = h('button', 'wz-button secondary', 'Delete this day'); del.type = 'button'; del.onclick = () => dropDay(day); act.append(del); }
+  form.append(field('Day', date), field('Sleep', sleep, 'hours asleep'), feelBox, field('Activity', actv, 'active minutes'),
+    field('Weight', wt, 'kg'), field('Note', note), act,
+    h('p', 'hl-log-src', 'Saved in Health on your Wizard. A connected wearable wins for a day it covers.'));
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const body = { date: date.value || day, feel: feel || undefined, note: note.value.trim() || undefined };
+    for (const [k, i] of [['sleep_h', sleep], ['activity_min', actv], ['weight_kg', wt]]) if (i.value !== '') body[k] = Number(i.value);
+    save.disabled = true;
+    try {
+      const r = await api('api/log', body);
+      ST = r.status; sel = null; await loadData(); renderAll(); closeSheet(); say('Saved ' + dayName(body.date) + '.', 'note');
+    } catch (err) { say(err.message, 'error'); save.disabled = false; }
+  };
+  openSheet(got ? 'Edit a logged day' : 'Log a day', [form, manualImportRow()], 'log');
+}
+function manualImportRow() {
+  const p = h('p', 'hl-note', 'Or import a CSV with a date column and any of sleep_hours, feel, activity_minutes, weight_kg and note. ');
+  const ib = h('button', 'wz-button secondary hl-sm', 'Import a file'); ib.type = 'button'; ib.onclick = pickFile;
+  p.append(ib); return p;
+}
+function closeSheet() { const d = el('sheet'); if (d.open) { if (window.WzSheet && WzSheet.close) WzSheet.close(d); else d.close(); } }
+async function dropDay(day) {
+  try { const r = await api('api/log/delete', { date: day }); ST = r.status; await loadData(); renderAll(); closeSheet(); say('Deleted ' + dayName(day) + '.', 'note'); }
+  catch (err) { say(err.message, 'error'); }
+}
+async function dropImport(b) {
+  // two taps: the first asks, the second deletes every imported day (hand-logged days stay)
+  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Delete all imported days?'; return; }
+  try { const r = await api('api/log/delete', { source: 'health-import' }); ST = r.status; await loadData(); renderAll(); openSources(); say('Imported days deleted.', 'note'); }
+  catch (err) { say(err.message, 'error'); }
+}
+function pickFile() { const f = el('csvfile'); f.value = ''; f.click(); }
+el('csvfile').onchange = async () => {
+  const file = el('csvfile').files[0]; if (!file) return;
+  if (file.size > 4 * 1024 * 1024) { say('That file is too big (4 MB at most).', 'error'); return; }
+  say('Importing ' + file.name + '\u2026', 'note');
+  try {
+    const r = await api('api/import', { csv: await file.text(), name: file.name.slice(0, 120) });
+    ST = r.status; sel = null; await loadData(); renderAll(); closeSheet();
+    say('Imported ' + r.imported + (r.imported === 1 ? ' day' : ' days') + (r.skipped_count ? '; skipped ' + r.skipped_count + ' (first: row ' + r.skipped[0].row + ', ' + r.skipped[0].error.replace(/\.$/, '') + ')' : '') + '.', 'note');
+  } catch (err) { say(err.message, 'error'); }
+};
+el('logbtn').onclick = () => openLog(shown());
+el('log-first').onclick = () => openLog(null);
+el('import-first').onclick = pickFile;
 async function setPrimary(id) {
   try { ST = await api('api/primary', { id }); sel = null; await loadData(); renderAll(); openSources(); }
   catch (err) { say(err.message, 'error'); }
