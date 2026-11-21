@@ -548,6 +548,80 @@
           }
         }
       }
+    },
+    "/api/import/apple-health": {
+      "get": {
+        "summary": "Where the Apple Health export import stands: state idle, receiving, reading (read/total bytes), done (imported, from, to, counts, status) or error (switch manual-log)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Switch manual-log is off"
+          }
+        }
+      },
+      "post": {
+        "summary": "Import the iPhone Health app's export.zip (or its export.xml), sent as the raw body, into the Imported file source: sleep hours, Apple exercise minutes and weight per day. Read in the background; poll GET (switch manual-log)",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/zip": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Received; reading",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Switch manual-log is off"
+          },
+          "409": {
+            "description": "An import is already running"
+          },
+          "413": {
+            "description": "Too big"
+          },
+          "415": {
+            "description": "Not sent as application/zip"
+          }
+        }
+      }
     }
   }
 }

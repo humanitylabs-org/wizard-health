@@ -30,7 +30,7 @@
         <i class="hl-wait" id="wait" hidden></i>
         <!-- Switch manual-log: no wearable needed. Log a day by hand or import a CSV of daily rows -->
         <div class="hl-setups hl-manual" id="manual-empty" hidden>
-          <p class="hl-note">No wearable? Log your sleep, how you feel and your activity by hand.</p>
+          <p class="hl-note">No wearable? Log your sleep, how you feel and your activity by hand, or import your Apple Health export.</p>
           <button type="button" class="wz-button" id="log-first">Log a day</button>
           <button type="button" class="wz-button secondary" id="import-first">Import a file</button>
         </div>
@@ -97,7 +97,7 @@
   </template>
   <!-- The one pop-up: the sources list behind the corner dot -->
   <dialog class="wz-sheet hl-sheet" id="sheet" aria-labelledby="sheet-h"><div id="sheet-body"></div></dialog>
-  <!-- Switch manual-log: the CSV picked for Import a file (read in the page, sent as text) -->
-  <input type="file" id="csvfile" accept=".csv,text/csv,text/plain" hidden>
+  <!-- Switch manual-log: the file picked for Import a file (a CSV, read in the page and sent as text, or the Apple Health export.zip, sent as it is) -->
+  <input type="file" id="csvfile" accept=".csv,text/csv,text/plain,.zip,application/zip,.xml" hidden>
 </body>
 </html>

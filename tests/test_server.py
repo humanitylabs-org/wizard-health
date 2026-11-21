@@ -13,6 +13,7 @@ import tempfile
 import threading
 import unittest
 import urllib.error
+import zipfile
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -119,7 +120,7 @@ def http(port, method, path, body=None, headers=None):
     if body is not None:
         h['Content-Type'] = 'application/json'
     h.update(headers or {})
-    req = urllib.request.Request(f'http://127.0.0.1:{port}{path}', data=json.dumps(body).encode() if body is not None else None, method=method, headers=h)
+    req = urllib.request.Request(f'http://127.0.0.1:{port}{path}', data=body if isinstance(body, bytes) else json.dumps(body).encode() if body is not None else None, method=method, headers=h)
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             return r.status, r.read()
@@ -1137,6 +1138,19 @@ class WordsTest(unittest.TestCase):
         self.assertEqual(S(3, 20, False), 'Taking it easy is right today.')
         self.assertEqual(self.run_js("[W.targetText('hi'), W.targetText('md'), W.targetText('lo')]"), ['14\u201318', '10\u201314', 'under 10'])
 
+    def test_activity_daily_goal(self):
+        # #9: a logged or imported day with active minutes but no feeling is judged against the daily goal, never red
+        L = "{label: 'Active minutes', unit: 'min', scale_max: 120, targets: {high: [45, 90], medium: [20, 45], low: [0, 20]}, over_margin: 30, goal: 30}"
+        m = self.run_js(f"W.actMatch(45, null, {L})")
+        self.assertEqual((m['band'], m['word']), ('hi', 'Goal reached'))
+        m = self.run_js(f"W.actMatch(12, undefined, {L})")
+        self.assertEqual((m['band'], m['word'], m['left']), ('md', 'Room to push', 18))
+        self.assertEqual(self.run_js(f"W.actMatch(200, null, {L})")['band'], 'hi')
+        self.assertEqual(self.run_js(f"W.matchSay(W.actMatch(12, null, {L}), null, false)"), '18 minutes to go to the daily goal of 30.')
+        self.assertEqual(self.run_js(f"W.matchSay(W.actMatch(30, null, {L}), null, true)"), 'You reached the daily goal of 30 active minutes.')
+        self.assertIsNone(self.run_js(f"W.actGuide(12, null, {L}, false)"))
+        self.assertEqual(self.run_js(f"W.actMatch(100, 20, {L})")['word'], 'Too much for today')   # a feeling still wins
+
     def test_activity_guide(self):
         # 0.11: the Activity bar + direction line, so a yellow card says which way to go
         G = lambda v, r, past=False: self.run_js(f"W.actGuide({v}, {r}, undefined, {str(past).lower()})")
@@ -1379,8 +1393,123 @@ class ManualLogTest(unittest.TestCase):
         self.assertIn('error', r)
         self.assertEqual(http(self.port, 'POST', '/api/log', {'feel': 'ready'})[0], 404)
         sw = next(x for x in S.SWITCHES if x['id'] == 'manual-log')
-        self.assertEqual((sw['default'], sw['issues']), (False, ['humanitylabs-org/wizard-health#8']))
+        self.assertEqual((sw['default'], sw['issues']), (False, ['humanitylabs-org/wizard-health#8', 'humanitylabs-org/wizard-health#9']))
 
+
+    def apple_zip(self, path, extra=''):
+        """A small export.zip as the iPhone Health app makes it: a DTD, then Records from a phone and a watch."""
+        def rec(kind, start, end, value, unit=None, src='Apple Watch'):
+            u = f' unit="{unit}"' if unit else ''
+            return f' <Record type="{kind}" sourceName="{src}"{u} startDate="{start}" endDate="{end}" value="{value}"/>\n'
+        xml = ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE HealthData [\n<!ELEMENT HealthData (ExportDate,Me,(Record|Workout)*)>\n'
+               '<!ATTLIST HealthData locale CDATA #REQUIRED>\n]>\n<HealthData locale="en_GB">\n <ExportDate value="2026-10-04 08:00:00 +0200"/>\n'
+               ' <Me HKCharacteristicTypeIdentifierBiologicalSex="HKBiologicalSexMale"/>\n'
+               # night to 2 Oct: in bed (ignored), core 23:00-03:00 and REM 03:00-06:30 from the watch, the phone's
+               # "asleep" 23:30-06:00 overlaps it and must not add up: 7.5 h
+               + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-10-01 22:40:00 +0200', '2026-10-02 06:45:00 +0200', 'HKCategoryValueSleepAnalysisInBed', src='iPhone')
+               + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-10-01 23:00:00 +0200', '2026-10-02 03:00:00 +0200', 'HKCategoryValueSleepAnalysisAsleepCore')
+               + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-10-02 03:00:00 +0200', '2026-10-02 06:30:00 +0200', 'HKCategoryValueSleepAnalysisAsleepREM')
+               + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-10-01 23:30:00 +0200', '2026-10-02 06:00:00 +0200', 'HKCategoryValueSleepAnalysisAsleep', src='iPhone')
+               + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-10-02 06:30:00 +0200', '2026-10-02 06:40:00 +0200', 'HKCategoryValueSleepAnalysisAwake')
+               # a 30 min nap on 2 Oct afternoon counts for 2 Oct; a night ending 3 Oct: 6 h
+               + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-10-02 14:00:00 +0200', '2026-10-02 14:30:00 +0200', 'HKCategoryValueSleepAnalysisAsleepCore')
+               + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-10-03 00:30:00 +0200', '2026-10-03 06:30:00 +0200', 'HKCategoryValueSleepAnalysisAsleepUnspecified')
+               # exercise minutes: the watch 20+25 on 2 Oct, the phone 10 (the bigger source wins, never added)
+               + rec('HKQuantityTypeIdentifierAppleExerciseTime', '2026-10-02 07:00:00 +0200', '2026-10-02 07:20:00 +0200', '20', 'min')
+               + rec('HKQuantityTypeIdentifierAppleExerciseTime', '2026-10-02 18:00:00 +0200', '2026-10-02 18:25:00 +0200', '25', 'min')
+               + rec('HKQuantityTypeIdentifierAppleExerciseTime', '2026-10-02 18:00:00 +0200', '2026-10-02 18:10:00 +0200', '10', 'min', 'iPhone')
+               + rec('HKQuantityTypeIdentifierAppleExerciseTime', '2026-10-03 12:00:00 +0200', '2026-10-03 12:30:00 +0200', 'lots', 'min')
+               # weight in pounds on 1 Oct (two readings, the later wins); steps and heart rate are skipped
+               + rec('HKQuantityTypeIdentifierBodyMass', '2026-10-01 07:00:00 +0200', '2026-10-01 07:00:00 +0200', '180', 'lb', 'Scale')
+               + rec('HKQuantityTypeIdentifierBodyMass', '2026-10-01 21:00:00 +0200', '2026-10-01 21:00:00 +0200', '178', 'lb', 'Scale')
+               + rec('HKQuantityTypeIdentifierStepCount', '2026-10-02 07:00:00 +0200', '2026-10-02 08:00:00 +0200', '4000', 'count')
+               + rec('HKQuantityTypeIdentifierHeartRate', '2026-10-02 07:00:00 +0200', '2026-10-02 07:00:00 +0200', '61', 'count/min')
+               + extra + '</HealthData>\n')
+        with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr('apple_health_export/export_cda.xml', '<ClinicalDocument/>')
+            z.writestr('apple_health_export/export.xml', xml)
+        return path
+
+    def wait_apple(self):
+        for _ in range(200):
+            j = self.S.apple_import_info()
+            if j['state'] not in ('receiving', 'reading'):
+                return j
+            import time
+            time.sleep(0.05)
+        self.fail('Apple Health import never finished')
+
+    def test_7_apple_health_export_zip(self):
+        """#9: an owner with no wearable picks his export.zip and sees his sleep, activity and weight."""
+        S = self.S
+        z = self.apple_zip(self.tmp / 'export.zip')
+        with zipfile.ZipFile(z) as zf, zf.open(S._apple_member(zf)) as f:
+            days, n = S.parse_apple_export(f)
+        self.assertEqual(n, 15)
+        self.assertEqual(days['2026-10-02'], {'sleep_h': 7.5 + 0.5, 'activity_min': 45})
+        self.assertEqual(days['2026-10-03'], {'sleep_h': 6.0})
+        self.assertAlmostEqual(days['2026-10-01']['weight_kg'], 178 * 0.45359237)
+        # over HTTP, as the page sends it: the raw file, then poll until done
+        body = z.read_bytes()
+        code, out = http(self.port, 'POST', '/api/import/apple-health?name=export.zip', body,
+                         {'Content-Type': 'application/zip'})
+        self.assertEqual(code, 202, out)
+        j = self.wait_apple()
+        self.assertEqual((j['state'], j['imported'], j['from'], j['to']), ('done', 3, '2026-10-01', '2026-10-03'), j)
+        self.assertEqual(j['counts'], {'sleep': 2, 'activity': 1, 'weight': 1})
+        code, out = http(self.port, 'GET', '/api/import/apple-health')
+        self.assertEqual((code, json.loads(out)['state']), (200, 'done'))
+        self.assertFalse((S.DATA / 'apple-health-import.part').exists())          # the upload is deleted
+        d = {x['date']: x for x in S.days_list({'from': '2026-10-01', 'to': '2026-10-03'})['days']}
+        self.assertEqual(set(d), {'2026-10-01', '2026-10-02', '2026-10-03'})
+        self.assertEqual((d['2026-10-02']['source'], d['2026-10-02']['sleep']['asleep_h'], d['2026-10-02']['load']['value']),
+                         ('health-import', 8.0, 45))
+        self.assertEqual(d['2026-10-02']['entry'], {'how': 'file', 'file': 'export.zip'})
+        self.assertEqual(d['2026-10-01']['weight_kg'], 80.7)
+        self.assertTrue(d['2026-10-02']['sleep_band'])                          # coloured in the Sleep graph
+        am = d['2026-10-02']['activity_match']                                  # and in Activity: the daily goal
+        self.assertEqual((am['colour'], am['word'], am['target']), ('green', 'Goal reached', '30+'))
+        src = {s['id']: s for s in S.status_info()['sources']}
+        self.assertEqual((src['health-import']['name'], src['health-import']['days']), ('Imported file', 3))
+        # imported again: a date replaces its row, other dates stay; a CSV day on another date stays too
+        S.import_csv({'csv': 'date,sleep\n2026-09-01,7\n'})
+        S.log_day({'date': '2026-10-03', 'feel': 'ready'})
+        code, out = http(self.port, 'POST', '/api/import/apple-health', body, {'Content-Type': 'application/octet-stream'})
+        self.assertEqual(code, 202, out)
+        self.assertEqual(self.wait_apple()['imported'], 3)
+        self.assertEqual(len(S.days_list({'from': '2026-09-01', 'to': '2026-10-03'})['days']), 4)
+        d = S.days_list({'from': '2026-10-03', 'to': '2026-10-03'})['days'][0]
+        self.assertEqual((d['origins']['readiness'], d['origins']['sleep']), ('health-log', 'health-import'))
+        # a plain export.xml works as well
+        with zipfile.ZipFile(z) as zf:
+            xml = zf.read('apple_health_export/export.xml')
+        self.assertEqual(http(self.port, 'POST', '/api/import/apple-health', xml, {'Content-Type': 'application/zip'})[0], 202)
+        self.assertEqual(self.wait_apple()['state'], 'done')
+
+    def test_8_apple_health_refusals(self):
+        S = self.S
+        z = self.apple_zip(self.tmp / 'export8.zip').read_bytes()
+        # a simple cross-site form type, another site, or the switch off: refused before anything is read
+        self.assertEqual(http(self.port, 'POST', '/api/import/apple-health', z, {'Content-Type': 'text/plain'})[0], 415)
+        self.assertEqual(http(self.port, 'POST', '/api/import/apple-health', z,
+                              {'Content-Type': 'application/zip', 'Host': 'box.example.ts.net', 'Origin': 'https://evil.example'})[0], 403)
+        # not an export, a damaged zip, a zip with no xml, an XML bomb: an error the page shows, nothing imported
+        bad = [b'hello there', b'PK\x03\x04 broken', b'<?xml version="1.0"?><Other/>',
+               b'<?xml version="1.0"?><!DOCTYPE HealthData [<!ENTITY a "aaaaaaaaaa">]><HealthData>&a;</HealthData>']
+        nz = self.tmp / 'noxml.zip'
+        with zipfile.ZipFile(nz, 'w') as zf:
+            zf.writestr('readme.txt', 'hi')
+        bad.append(nz.read_bytes())
+        for b in bad:
+            code, out = http(self.port, 'POST', '/api/import/apple-health', b, {'Content-Type': 'application/zip'})
+            self.assertEqual(code, 202, out)
+            j = self.wait_apple()
+            self.assertEqual(j['state'], 'error', b[:20])
+            self.assertTrue(j['error'])
+        self.assertNotIn('health-import', {s['id'] for s in S.status_info()['sources']})
+        self.on.clear()
+        self.assertEqual(http(self.port, 'POST', '/api/import/apple-health', z, {'Content-Type': 'application/zip'})[0], 404)
+        self.assertEqual(http(self.port, 'GET', '/api/import/apple-health')[0], 404)
 
 if __name__ == '__main__':
     unittest.main()

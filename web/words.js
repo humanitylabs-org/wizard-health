@@ -51,6 +51,12 @@
   // The value is rounded to one decimal first, as the screen shows it, so the colour matches the number.
   function actMatch(strain, score, load) {
     const r = recBand(score), t = targets(load);
+    // A logged or imported day with no feeling (#9): judged against the daily goal (30 active minutes), never red.
+    const goal = load && typeof load === 'object' && num(load.goal) ? load.goal : null;
+    if (num(strain) && !r && goal !== null) {
+      const g = Math.round(strain * 10) / 10;
+      return g >= goal ? { band: 'hi', side: 'in', word: 'Goal reached', goal } : { band: 'md', side: 'under', word: 'Room to push', goal, left: Math.ceil(goal - g) };
+    }
     if (!num(strain) || !r || !t) return null;
     const v = Math.round(strain * 10) / 10, [lo, hi] = t[r];
     if (v > hi + t.slack) return { band: 'lo', side: 'over', word: 'Too much for today' };
@@ -67,6 +73,8 @@
   function matchSay(m, score, past) {
     const S = MATCH_SAY[past ? 'past' : 'now'];
     if (!m) return '';
+    if (m.goal) return m.side === 'in' ? 'You reached the daily goal of ' + m.goal + ' active minutes.'
+      : m.left + (past ? ' minutes short of' : ' minutes to go to') + ' the daily goal of ' + m.goal + '.';
     if (m.side === 'in') return recBand(score) === 'lo' && num(score) ? S.rest : S.in;
     if (m.side === 'under') return S.under;
     return m.band === 'lo' ? S.much : S.over;
@@ -77,7 +85,7 @@
   // { lo, hi, max, v, side, text }: lo/hi = the green zone, max = the bar's end (the scale's top, never below the value).
   function actGuide(strain, score, load, past) {
     const m = actMatch(strain, score, load), t = targets(load), r = recBand(score);
-    if (!m || !t) return null;
+    if (!m || !t || m.goal) return null;   // the daily goal says it in one sentence (matchSay), no target bar
     const v = Math.round(strain * 10) / 10, [lo, hi] = t[r];
     const whole = num(t.max) && t.max >= 50;
     const f = x => { const y = whole ? Math.round(x) : Math.round(x * 10) / 10; return Number.isInteger(y) ? String(y) : y.toFixed(1); };
