@@ -31,14 +31,18 @@ if '--check' in sys.argv:
 subprocess.run(['wam', 'package-inline', str(root)], check=True, stdout=subprocess.DEVNULL)
 p = root / 'runtipi' / 'docker-compose.yml'
 t = p.read_text()
-m = PAT.search(t)
+m, zipped = PAT.search(t), False
+if not m:                                   # newer wam compresses the payload itself
+    m, zipped = ZPAT.search(t), True
 if not m:
     raise SystemExit('package template changed: inline payload not found')
-files = json.loads(base64.b64decode(m.group(1)))
+raw = base64.b64decode(m.group(1))
+files = json.loads(zlib.decompress(raw) if zipped else raw)
 blob = base64.b64encode(zlib.compress(json.dumps(files).encode(), 9)).decode()
 t = t[:m.start()] + f"json.loads(zlib.decompress(base64.b64decode('{blob}')))" + t[m.end():]
-swaps = [
-    ('import base64,json,pathlib,runpy', 'import base64,json,pathlib,runpy,zlib'),
+swaps = [] if 'import base64,json,pathlib,runpy,zlib' in t else [
+    ('import base64,json,pathlib,runpy', 'import base64,json,pathlib,runpy,zlib')]
+swaps += [
     ('    image: python:3.12-alpine\n',
      '    image: python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4\n    pids_limit: 64\n'),
     ("      PORT: '8799'\n", "      PORT: '8826'\n      BIND: 0.0.0.0\n      PYTHONDONTWRITEBYTECODE: '1'\n"),
