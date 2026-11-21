@@ -67,11 +67,13 @@ KNOWN = [
 # wearable wins each metric on a day it covers), and are never probed, pulled, aged out or purged.
 LOCAL = {
     'health-log': {'name': 'Logged by hand', 'how': 'hand', 'blurb': 'Days you logged in Health.'},
-    'health-import': {'name': 'Imported file', 'how': 'file', 'blurb': 'Days imported from a CSV file.'},
+    'health-import': {'name': 'Imported file', 'how': 'file', 'blurb': 'Days imported from a CSV file or an Apple Health export.'},
 }
 # Active minutes judged against how you felt (the stand-in recovery): Ready 45-90 min, So-so 20-45, Run down under 20.
+# A day with active minutes but no feeling (an Apple Health import, #9) is judged against `goal`, Apple's default daily
+# Exercise goal: green at 30 minutes or more, yellow below it, never red.
 LOCAL_LOAD = {'label': 'Active minutes', 'unit': 'min', 'min': 0, 'max': None, 'scale_max': 120,
-              'targets': {'high': [45, 90], 'medium': [20, 45], 'low': [0, 20]}, 'over_margin': 30}
+              'targets': {'high': [45, 90], 'medium': [20, 45], 'low': [0, 20]}, 'over_margin': 30, 'goal': 30}
 # How you feel -> the recovery band it stands for. The score only places the day in its band (Ready 67+, So-so
 # 34-66, Run down 0-33); `felt` says it was not measured, and the screen shows the word, never a percentage.
 FEEL = {'ready': (80, 'high'), 'so-so': (50, 'medium'), 'run-down': (20, 'low')}
@@ -780,6 +782,235 @@ def import_csv(body):
             'from': min(recs) if recs else None, 'to': max(recs) if recs else None, 'status': status_info()}
 
 
+# ---------------- the iPhone Health app's export (switch manual-log, #9) ----------------
+# Health > profile > Export All Health Data makes export.zip (often hundreds of MB; export.xml inside can be several
+# GB). The page sends the file as it is; Health spools it to disk in DATA_DIR (never memory: the container has 128 MB
+# and /tmp is RAM), then reads export.xml straight out of the zip with a streaming parser in a background thread and
+# keeps only a few numbers per day. The days land in the Imported file source with the CSV import's rules: a date
+# imported again replaces its row, a connected wearable wins a day it covers.
+MAX_APPLE_BYTES = int(os.environ.get('HEALTH_MAX_APPLE_BYTES', str(4 * 1024 ** 3)))
+MAX_APPLE_XML_BYTES = int(os.environ.get('HEALTH_MAX_APPLE_XML_BYTES', str(20 * 1024 ** 3)))
+APPLE_TYPES = ('application/zip', 'application/x-zip-compressed', 'application/octet-stream')   # never a CORS-simple type
+APPLE_SLEEP = 'HKCategoryTypeIdentifierSleepAnalysis'
+APPLE_EXERCISE = 'HKQuantityTypeIdentifierAppleExerciseTime'
+APPLE_WEIGHT = 'HKQuantityTypeIdentifierBodyMass'
+APPLE_NIGHT_SHIFT = dt.timedelta(hours=6)   # sleep ending before 18:00 belongs to that day, later to the next (the night)
+_APPLE = {'state': 'idle'}
+_APPLE_LOCK = threading.Lock()
+
+
+def _apple_time(s):
+    """'2026-10-01 23:10:00 +0200' -> (aware datetime, the owner's local wall-clock time then)."""
+    t = dt.datetime.strptime(s.strip(), '%Y-%m-%d %H:%M:%S %z')
+    return t, t.replace(tzinfo=None)
+
+
+def _apple_member(zf):
+    """The export.xml inside an export.zip (its name is translated on some phones, so fall back to the largest .xml
+    that is not the clinical-records export)."""
+    infos = [i for i in zf.infolist() if not i.is_dir() and i.filename.lower().endswith('.xml')]
+    named = [i for i in infos if i.filename.lower().rsplit('/', 1)[-1] == 'export.xml']
+    rest = [i for i in infos if 'cda' not in i.filename.lower().rsplit('/', 1)[-1]
+            and '/electrocardiograms/' not in i.filename.lower() and '/workout-routes/' not in i.filename.lower()]
+    pick = named or sorted(rest, key=lambda i: i.file_size, reverse=True)
+    if not pick:
+        raise Problem(400, 'That zip has no export.xml. Pick the export.zip the Health app made.')
+    return pick[0]
+
+
+def parse_apple_export(f, total=None, progress=None):
+    """Stream an Apple Health export.xml (a file object) into {date: {'sleep_h', 'activity_min', 'weight_kg'}}.
+    Sleep is the time asleep (overlapping records from the phone and a watch counted once), on the day you woke up;
+    active minutes are Apple's exercise minutes (the source with the most that day, so two devices don't add up);
+    weight is the day's last body-mass reading."""
+    import xml.parsers.expat
+    sleep, exercise, weight = {}, {}, {}
+    seen = {'root': None, 'records': 0}
+
+    def start(name, a):
+        if seen['root'] is None:
+            seen['root'] = name
+            if name != 'HealthData':
+                raise Problem(400, 'That is not an Apple Health export.')
+        if name != 'Record':
+            return
+        seen['records'] += 1
+        kind = a.get('type')
+        try:
+            if kind == APPLE_SLEEP:
+                if not str(a.get('value', '')).startswith('HKCategoryValueSleepAnalysisAsleep'):
+                    return            # in bed / awake
+                t0, _ = _apple_time(a['startDate'])
+                t1, w1 = _apple_time(a['endDate'])
+                if t1 > t0:
+                    sleep.setdefault((w1 + APPLE_NIGHT_SHIFT).date().isoformat(), []).append((t0, t1))
+            elif kind == APPLE_EXERCISE:
+                v = float(a['value'])
+                if a.get('unit', 'min') != 'min' or not 0 <= v <= 1440:
+                    return
+                _, w0 = _apple_time(a['startDate'])
+                d = exercise.setdefault(w0.date().isoformat(), {})
+                src = a.get('sourceName', '')
+                d[src] = d.get(src, 0) + v
+            elif kind == APPLE_WEIGHT:
+                v, unit = float(a['value']), a.get('unit', 'kg')
+                kg = v if unit == 'kg' else v * 0.45359237 if unit == 'lb' else v / 1000 if unit == 'g' else \
+                    v * 6.35029318 if unit == 'st' else None
+                if kg is None or not 20 <= kg <= 400:
+                    return
+                _, w0 = _apple_time(a['startDate'])
+                day, at = w0.date().isoformat(), w0.isoformat()
+                if day not in weight or at >= weight[day][0]:
+                    weight[day] = (at, kg)
+        except (KeyError, ValueError, TypeError):
+            return                    # one odd record never stops the import
+
+    def no_entities(*_a):
+        raise Problem(400, 'That is not an Apple Health export.')   # Apple's DTD declares no entities
+
+    p = xml.parsers.expat.ParserCreate()
+    p.StartElementHandler = start
+    p.EntityDeclHandler = no_entities
+    done = 0
+    try:
+        while True:
+            chunk = f.read(1 << 20)
+            if not chunk:
+                break
+            done += len(chunk)
+            if done > MAX_APPLE_XML_BYTES:
+                raise Problem(413, 'That export is too big.')
+            p.Parse(chunk, False)
+            if progress:
+                progress(done, total, seen['records'])
+        p.Parse(b'', True)
+    except xml.parsers.expat.ExpatError:
+        raise Problem(400, 'That file is damaged or not an Apple Health export.') from None
+    if seen['root'] is None:
+        raise Problem(400, 'That file is empty.')
+    days = {}
+    for day, spans in sleep.items():
+        spans.sort()
+        secs, cur = 0.0, None
+        for a, b in spans:                       # union of the intervals: the phone and a watch both log a night
+            if cur and a <= cur[1]:
+                cur[1] = max(cur[1], b)
+            else:
+                if cur:
+                    secs += (cur[1] - cur[0]).total_seconds()
+                cur = [a, b]
+        if cur:
+            secs += (cur[1] - cur[0]).total_seconds()
+        if secs > 0:
+            days.setdefault(day, {})['sleep_h'] = min(secs / 3600, 24)
+    for day, by_src in exercise.items():
+        days.setdefault(day, {})['activity_min'] = min(max(by_src.values()), 1440)
+    for day, (_, kg) in weight.items():
+        days.setdefault(day, {})['weight_kg'] = kg
+    return days, seen['records']
+
+
+def _apple_set(**kw):
+    with _APPLE_LOCK:
+        _APPLE.update(kw)
+
+
+def _apple_run(path, name):
+    import zipfile
+    try:
+        with open(path, 'rb') as raw:
+            zipped = raw.read(4) == b'PK\x03\x04'
+        tick = lambda done, total, n: _apple_set(read=done, total=total, records=n)
+        if zipped:
+            try:
+                zf = zipfile.ZipFile(path)
+            except zipfile.BadZipFile:
+                raise Problem(400, 'That zip is damaged. Export it again from the Health app.') from None
+            with zf:
+                info = _apple_member(zf)
+                with zf.open(info) as f:
+                    days, n = parse_apple_export(f, info.file_size, tick)
+        else:
+            with open(path, 'rb') as f:
+                days, n = parse_apple_export(f, os.path.getsize(path), tick)
+        today = _now().date() + dt.timedelta(days=1)
+        recs = []
+        for day, v in sorted(days.items()):
+            try:
+                if not (1900 <= int(day[:4]) and dt.date.fromisoformat(day) <= today):
+                    continue
+            except ValueError:
+                continue
+            recs.append(local_day(day, v.get('sleep_h'), None, v.get('activity_min'), v.get('weight_kg'),
+                                  None, 'file', name))
+        if not recs:
+            raise Problem(400, 'No sleep, exercise minutes or weight in that export.')
+        _write_local('health-import', recs)
+        _apple_set(state='done', finished_at=_iso(), records=n, imported=len(recs), error=None,
+                   **{'from': recs[0]['date'], 'to': recs[-1]['date']},
+                   counts={'sleep': sum(1 for v in days.values() if 'sleep_h' in v),
+                           'activity': sum(1 for v in days.values() if 'activity_min' in v),
+                           'weight': sum(1 for v in days.values() if 'weight_kg' in v)})
+    except Problem as e:
+        _apple_set(state='error', finished_at=_iso(), error=e.message)
+    except Exception:                                    # noqa: BLE001 - never leave the job "reading" forever
+        _apple_set(state='error', finished_at=_iso(), error='Health could not read that file.')
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def apple_import_info():
+    """Where the Apple Health import stands: idle, receiving, reading (with read/total bytes), done or error."""
+    _need_manual()
+    with _APPLE_LOCK:
+        out = dict(_APPLE)
+    if out.get('state') == 'done':
+        out['status'] = status_info()
+    return out
+
+
+def apple_import_start(read, size, kind, name):
+    """Receive an export.zip (or its export.xml) as the raw request body, spooled to disk, then read it in the
+    background. `read(n)` reads the body; returns the job (poll GET /api/import/apple-health)."""
+    _need_manual()
+    if kind not in APPLE_TYPES:
+        raise Problem(415, 'Send the file as application/zip.')
+    if not 0 < size <= MAX_APPLE_BYTES:
+        raise Problem(413, 'That file is too big.' if size else 'The file is empty.')
+    name = (str(name or 'export.zip').replace('/', ' ').strip() or 'export.zip')[:120]
+    with _APPLE_LOCK:
+        if _APPLE.get('state') in ('receiving', 'reading'):
+            raise Problem(409, 'An Apple Health import is already running.')
+        _APPLE.clear()
+        _APPLE.update(state='receiving', name=name, started_at=_iso(), read=0, total=size)
+    DATA.mkdir(parents=True, exist_ok=True)
+    path = DATA / 'apple-health-import.part'
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'wb') as out:
+            left = size
+            while left:
+                chunk = read(min(left, 1 << 20))
+                if not chunk:
+                    raise Problem(400, 'The upload stopped before the end.')
+                out.write(chunk)
+                left -= len(chunk)
+    except BaseException as e:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        _apple_set(state='error', finished_at=_iso(),
+                   error=e.message if isinstance(e, Problem) else 'The upload stopped before the end.')
+        raise
+    _apple_set(state='reading', read=0, total=None, records=0)
+    threading.Thread(target=_apple_run, args=(path, name), daemon=True).start()
+    return apple_import_info()
+
+
 # ---------------- reading Health's copy ----------------
 
 def _source_arg(args):
@@ -1045,6 +1276,12 @@ def activity_match(strain, score, load=None):
     for today'). Under-doing is never red. None when either value is missing or the load has no scale."""
     r = _rec_band(score)
     t = load_targets(load)
+    goal = (load or {}).get('goal') if isinstance(load, dict) else None
+    if _num(strain) and not r and _num(goal):       # a logged or imported day with no feeling: the daily goal (#9)
+        v = round(strain * 10) / 10
+        b, side, word = ('hi', 'in', 'Goal reached') if v >= goal else ('md', 'under', 'Room to push')
+        return {'colour': _LIGHT[b], 'word': word, 'side': side, 'strain': v, 'target': f'{goal:g}+',
+                'target_low': goal, 'target_high': None, 'scale_max': load.get('scale_max'), 'target_from': 'goal'}
     if not _num(strain) or not r or not t:
         return None
     v, (lo, hi) = round(strain * 10) / 10, t[r]
@@ -1663,6 +1900,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, sleep_list(query))
             if path == '/api/log':
                 return self.send(200, logged_day(query))
+            if path == '/api/import/apple-health':
+                return self.send(200, apple_import_info())
             if path == '/openapi.json':
                 return self.send(200, (ROOT / 'openapi.json').read_bytes())
             name = 'index.html' if path == '/' else path[1:]
@@ -1687,6 +1926,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(202 if out is None else 200, out)
             if path == '/api/import':
                 return self.send(200, import_csv(self.body(MAX_IMPORT_BYTES)))
+            if path == '/api/import/apple-health':
+                size = int(self.headers.get('Content-Length', '0') or 0)
+                kind = (self.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+                name = parse_qs(urlsplit(self.path).query).get('name', [''])[0]
+                try:
+                    return self.send(202, apple_import_start(self.rfile.read, size, kind, name))
+                except Problem:
+                    self.close_connection = True      # the unread body must not be taken for the next request
+                    raise
             b = self.body()
             if path == '/api/log':
                 return self.send(200, log_day(b))
@@ -1737,9 +1985,10 @@ SWITCHES = [
      'default': False, 'issues': ['humanitylabs-org/wizard-health#5']},
     {'id': 'manual-log', 'name': 'Log days by hand or import a file',
      'description': "Health works without a wearable: log a day by hand (sleep hours, how you feel, active minutes, "
-                    "weight, a note) or import a CSV of daily rows. Those days fill the same squares, cards and colours, "
+                    "weight, a note) or import a CSV of daily rows or the iPhone Health app's export.zip (sleep, exercise minutes, "
+                    "weight). Those days fill the same squares, cards and colours, "
                     "marked where they came from; a connected wearable wins for a day it covers. Your agent can log a day too.",
-     'default': False, 'issues': ['humanitylabs-org/wizard-health#8']},
+     'default': False, 'issues': ['humanitylabs-org/wizard-health#8', 'humanitylabs-org/wizard-health#9']},
 ]
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')

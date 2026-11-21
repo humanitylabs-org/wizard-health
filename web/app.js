@@ -710,7 +710,7 @@ async function openLog(iso) {
   openSheet(got ? 'Edit a logged day' : 'Log a day', [form, manualImportRow()], 'log');
 }
 function manualImportRow() {
-  const p = h('p', 'hl-note', 'Or import a CSV with a date column and any of sleep_hours, feel, activity_minutes, weight_kg and note. ');
+  const p = h('p', 'hl-note', 'Or import your Apple Health export (export.zip from the Health app), or a CSV with a date column and any of sleep_hours, feel, activity_minutes, weight_kg and note. ');
   const ib = h('button', 'wz-button secondary hl-sm', 'Import a file'); ib.type = 'button'; ib.onclick = pickFile;
   p.append(ib); return p;
 }
@@ -728,6 +728,7 @@ async function dropImport(b) {
 function pickFile() { const f = el('csvfile'); f.value = ''; f.click(); }
 el('csvfile').onchange = async () => {
   const file = el('csvfile').files[0]; if (!file) return;
+  if (/\.(zip|xml)$/i.test(file.name)) { appleImport(file); return; }
   if (file.size > 4 * 1024 * 1024) { say('That file is too big (4 MB at most).', 'error'); return; }
   say('Importing ' + file.name + '\u2026', 'note');
   try {
@@ -736,6 +737,29 @@ el('csvfile').onchange = async () => {
     say('Imported ' + r.imported + (r.imported === 1 ? ' day' : ' days') + (r.skipped_count ? '; skipped ' + r.skipped_count + ' (first: row ' + r.skipped[0].row + ', ' + r.skipped[0].error.replace(/\.$/, '') + ')' : '') + '.', 'note');
   } catch (err) { say(err.message, 'error'); }
 };
+// The iPhone Health app's export.zip (#9): sent as it is (it can be hundreds of MB), read on the Wizard in the
+// background; the page asks how far it is every two seconds.
+async function appleImport(file) {
+  closeSheet();
+  say('Sending ' + file.name + ' to your Wizard\u2026', 'note');
+  let job;
+  try {
+    const r = await fetch('api/import/apple-health?name=' + encodeURIComponent(file.name.slice(0, 120)),
+      { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });
+    job = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(job.error || 'Health could not take that file. Try again.');
+  } catch (err) { say(err.message, 'error'); return; }
+  while (job.state === 'receiving' || job.state === 'reading') {
+    const pct = job.total ? Math.min(99, Math.floor(100 * (job.read || 0) / job.total)) : 0;
+    say('Reading your Apple Health export\u2026 ' + pct + '%', 'note');
+    await new Promise(res => setTimeout(res, 2000));
+    try { job = await api('api/import/apple-health'); } catch (err) { say(err.message, 'error'); return; }
+  }
+  if (job.state !== 'done') { say(job.error || 'Health could not read that file.', 'error'); return; }
+  ST = job.status; sel = null; await loadData(); renderAll();
+  const what = [['sleep', 'sleep'], ['activity', 'active minutes'], ['weight', 'weight']].filter(([k]) => (job.counts || {})[k]).map(([, w]) => w);
+  say('Imported ' + job.imported + (job.imported === 1 ? ' day' : ' days') + ' from Apple Health' + (what.length ? ' (' + join(what) + ')' : '') + '.', 'note');
+}
 el('logbtn').onclick = () => openLog(shown());
 el('log-first').onclick = () => openLog(null);
 el('import-first').onclick = pickFile;
