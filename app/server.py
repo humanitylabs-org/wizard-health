@@ -62,7 +62,7 @@ KNOWN = [
     {'id': 'wizard-withings', 'name': 'Withings', 'base': 'http://wizard-withings:8834', 'app_path': '/wizard-withings/',
      'blurb': 'Sleep, heart and activity from your Withings devices.'},
 ]
-# 0.17 (switch manual-log, #8): days the owner logs by hand or imports from a file live in Health itself, as two local
+# 0.17 (#8): days the owner logs by hand or imports from a file live in Health itself, as two local
 # sources. They fill the same squares, cards and colours as a wearable, always after every wearable (a connected
 # wearable wins each metric on a day it covers), and are never probed, pulled, aged out or purged.
 LOCAL = {
@@ -197,10 +197,6 @@ def _rank(sid):
     return (i, str(sid or ''))
 
 
-def manual_on():
-    return switch_on('manual-log')
-
-
 def _local_entry(sid):
     """A local source in the shape of a probed one (status 'local': neither live nor off)."""
     m = LOCAL[sid]
@@ -212,11 +208,10 @@ def _local_entry(sid):
 
 
 def _live():
-    """Source id -> probe: every reachable connector, plus Health's own local sources while manual-log is on."""
+    """Source id -> probe: every reachable connector, plus Health's own local sources."""
     live = {p['id']: p for p in probe_all()}
-    if manual_on():
-        for sid in LOCAL:
-            live[sid] = _local_entry(sid)
+    for sid in LOCAL:
+        live[sid] = _local_entry(sid)
     return live
 
 
@@ -535,7 +530,7 @@ def sources_info():
     for sid in sorted(set(live) | set(rows), key=_rank):
         p, r = live.get(sid), rows.get(sid, {})
         if sid in LOCAL and not (p and r.get('days')):
-            continue      # listed only while manual-log is on and it holds days (off: kept, never shown or offered for removal)
+            continue      # listed only while it holds days
         off = is_gone(p)
         held = r.get('days', 0)
         # an off source's days are not used: report none, and when the held copy will be purged
@@ -597,12 +592,7 @@ def forget_source(body):
     return status_info()
 
 
-# ---------------- days logged by hand or imported (switch manual-log, #8) ----------------
-
-def _need_manual():
-    if not manual_on():
-        raise Problem(404, 'Logging days by hand is not switched on.')
-
+# ---------------- days logged by hand or imported (#8) ----------------
 
 def _opt_num(v, name, lo, hi):
     if v is None or (isinstance(v, str) and not v.strip()):
@@ -693,7 +683,6 @@ def _write_local(sid, recs):
 def log_day(body):
     """Save (or replace) the owner's hand-logged day. Every field optional but one: sleep_h, feel
     (ready/so-so/run-down), activity_min, weight_kg (or weight_lb), note. date defaults to today (UTC)."""
-    _need_manual()
     rec = _parse_entry(body)
     _write_local('health-log', [rec])
     return {'ok': True, 'day': rec, 'status': status_info()}
@@ -701,7 +690,6 @@ def log_day(body):
 
 def logged_day(args):
     """What the owner logged by hand for one date (for the log form), or null."""
-    _need_manual()
     date = _log_date(args.get('date'))
     got = _days('health-log', date, date, 1)
     return {'date': date, 'day': got[0] if got else None}
@@ -709,7 +697,6 @@ def logged_day(args):
 
 def delete_logged(body):
     """Delete one hand-logged day (`source` health-log, the default) or every imported day (`source` health-import)."""
-    _need_manual()
     sid = str(body.get('source') or 'health-log')
     if sid not in LOCAL:
         raise Problem(400, 'source must be health-log or health-import.')
@@ -742,7 +729,6 @@ def import_csv(body):
     again replaces its row; other dates stay. Returns how many days were imported and the rows that were skipped."""
     import csv
     import io
-    _need_manual()
     text, name = body.get('csv'), body.get('name')
     if not isinstance(text, str) or not text.strip():
         raise Problem(400, 'Send the file as text in csv.')
@@ -782,7 +768,7 @@ def import_csv(body):
             'from': min(recs) if recs else None, 'to': max(recs) if recs else None, 'status': status_info()}
 
 
-# ---------------- the iPhone Health app's export (switch manual-log, #9) ----------------
+# ---------------- the iPhone Health app's export (#9) ----------------
 # Health > profile > Export All Health Data makes export.zip (often hundreds of MB; export.xml inside can be several
 # GB). The page sends the file as it is; Health spools it to disk in DATA_DIR (never memory: the container has 128 MB
 # and /tmp is RAM), then reads export.xml straight out of the zip with a streaming parser in a background thread and
@@ -964,7 +950,6 @@ def _apple_run(path, name):
 
 def apple_import_info():
     """Where the Apple Health import stands: idle, receiving, reading (with read/total bytes), done or error."""
-    _need_manual()
     with _APPLE_LOCK:
         out = dict(_APPLE)
     if out.get('state') == 'done':
@@ -975,7 +960,6 @@ def apple_import_info():
 def apple_import_start(read, size, kind, name):
     """Receive an export.zip (or its export.xml) as the raw request body, spooled to disk, then read it in the
     background. `read(n)` reads the body; returns the job (poll GET /api/import/apple-health)."""
-    _need_manual()
     if kind not in APPLE_TYPES:
         raise Problem(415, 'Send the file as application/zip.')
     if not 0 < size <= MAX_APPLE_BYTES:
@@ -1714,7 +1698,7 @@ def status_info():
     info = sources_info()
     return {'app': APP_ID, 'version': VERSION, 'primary': info['primary'], 'sources': info['sources'],
             'connectors': info['connectors'], 'connected': any(s['connected'] for s in info['sources']),
-            'choose_primary': info['choose_primary'], 'manual_log': manual_on()}
+            'choose_primary': info['choose_primary']}
 
 
 # ---------------- MCP ----------------
@@ -1743,8 +1727,8 @@ TOOLS = [
                                                       'tz': {'type': 'string', 'description': "IANA zone for 'today' (default UTC), e.g. Asia/Bangkok"}},
                      'additionalProperties': False}, 'annotations': RO},
 ]
-# 0.17 (switch manual-log): the agent may add a logged day. A write tool: it reaches an agent only when the owner
-# ticked Health for it (the gateway's tick list), and is listed only while the switch is on.
+# 0.17 (#8): the agent may add a logged day. A write tool: it reaches an agent only when the owner
+# ticked Health for it (the gateway's tick list).
 LOG_TOOL = {'name': 'health_log_day', 'description': "Log one day by hand in Health (for days no wearable covers, or with no wearable at all): date (YYYY-MM-DD, default today), sleep_h (hours asleep), feel (ready, so-so or run-down: how the owner feels, which stands in for recovery), activity_min (active minutes), weight_kg, note. Give at least one. It replaces what was logged for that date and fills the same squares and cards as wearable data, marked 'Logged by hand'; a connected wearable still wins any metric it has that day. Only when the owner asked.",
             'inputSchema': {'type': 'object', 'properties': {'date': {'type': 'string', 'description': 'YYYY-MM-DD (default today)'},
                                                              'sleep_h': {'type': 'number'}, 'feel': {'type': 'string', 'enum': ['ready', 'so-so', 'run-down']},
@@ -1754,7 +1738,7 @@ LOG_TOOL = {'name': 'health_log_day', 'description': "Log one day by hand in Hea
 
 
 def tools():
-    return TOOLS + ([LOG_TOOL] if manual_on() else [])
+    return TOOLS + [LOG_TOOL]
 
 
 def call(name, a):
@@ -1772,7 +1756,7 @@ def call(name, a):
         return status_info()
     if name == 'health_wake':
         return wake_info(a)
-    if name == 'health_log_day' and manual_on():
+    if name == 'health_log_day':
         out = log_day(a)
         return {'ok': True, 'day': out['day']}
     raise KeyError(name)
@@ -1959,6 +1943,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     secure_files()
+    try:
+        forget_retired_switches()
+    except OSError:
+        pass
     threading.Thread(target=_loop, daemon=True).start()
     ThreadingHTTPServer((os.environ.get('BIND', '0.0.0.0'), int(PORT)), Handler).serve_forever()
 
@@ -1983,12 +1971,6 @@ SWITCHES = [
      'description': "The Health card in the morning report adds an Activity tile for yesterday (strain vs that day's "
                     "recovery target: did you hit it) and an Activity row in the 7-day strip. Today is never shown.",
      'default': False, 'issues': ['humanitylabs-org/wizard-health#5']},
-    {'id': 'manual-log', 'name': 'Log days by hand or import a file',
-     'description': "Health works without a wearable: log a day by hand (sleep hours, how you feel, active minutes, "
-                    "weight, a note) or import a CSV of daily rows or the iPhone Health app's export.zip (sleep, exercise minutes, "
-                    "weight). Those days fill the same squares, cards and colours, "
-                    "marked where they came from; a connected wearable wins for a day it covers. Your agent can log a day too.",
-     'default': False, 'issues': ['humanitylabs-org/wizard-health#8', 'humanitylabs-org/wizard-health#9']},
 ]
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')
@@ -2118,6 +2100,20 @@ def wizard_switches_install(handler_cls):
 # ---- end wizard.app-switches/1 ---------------------------------------------------------------------------------------
 
 wizard_switches_install(Handler)
+
+# Switches that are gone: their feature is now on for everyone (manual-log, #8 and #9), so a stored value is dropped.
+RETIRED_SWITCHES = ('manual-log',)
+
+
+def forget_retired_switches():
+    with _sw_lock:
+        saved = _sw_saved()
+        if not any(k in saved for k in RETIRED_SWITCHES):
+            return
+        f = _sw_file()
+        tmp = f.with_name(f.name + '.tmp')
+        tmp.write_text(_sw_json.dumps({k: v for k, v in saved.items() if k not in RETIRED_SWITCHES}))
+        _sw_os.replace(tmp, f)
 
 
 if __name__ == '__main__':

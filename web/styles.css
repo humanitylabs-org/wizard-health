@@ -252,7 +252,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   html .hl-sheet .wz-sheet-x { width: 44px; height: 44px; margin: -10px -10px 0 8px; }
 }
 
-/* Switch manual-log: the Log a day form in the one sheet */
+/* The Log a day form in the one sheet */
 .hl-manual { flex-direction: column; align-items: stretch; }
 .hl-manual .wz-button { width: 100%; }
 .hl-log { display: grid; gap: 12px; }

@@ -374,7 +374,7 @@
     },
     "/api/log": {
       "get": {
-        "summary": "The owner's hand-logged day for a date (switch manual-log)",
+        "summary": "The owner's hand-logged day for a date",
         "parameters": [
           {
             "name": "date",
@@ -395,14 +395,11 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "Switch manual-log is off"
           }
         }
       },
       "post": {
-        "summary": "Log (or replace) one day by hand (switch manual-log)",
+        "summary": "Log (or replace) one day by hand",
         "requestBody": {
           "required": true,
           "content": {
@@ -458,16 +455,13 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "Switch manual-log is off"
           }
         }
       }
     },
     "/api/log/delete": {
       "post": {
-        "summary": "Delete one hand-logged day, or every imported day (switch manual-log)",
+        "summary": "Delete one hand-logged day, or every imported day",
         "requestBody": {
           "required": true,
           "content": {
@@ -501,16 +495,13 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "Switch manual-log is off"
           }
         }
       }
     },
     "/api/import": {
       "post": {
-        "summary": "Import a CSV of daily rows (date + any of sleep_hours, feel, activity_minutes, weight_kg, note) as the Imported file source (switch manual-log)",
+        "summary": "Import a CSV of daily rows (date + any of sleep_hours, feel, activity_minutes, weight_kg, note) as the Imported file source",
         "requestBody": {
           "required": true,
           "content": {
@@ -542,16 +533,13 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "Switch manual-log is off"
           }
         }
       }
     },
     "/api/import/apple-health": {
       "get": {
-        "summary": "Where the Apple Health export import stands: state idle, receiving, reading (read/total bytes), done (imported, from, to, counts, status) or error (switch manual-log)",
+        "summary": "Where the Apple Health export import stands: state idle, receiving, reading (read/total bytes), done (imported, from, to, counts, status) or error",
         "responses": {
           "200": {
             "description": "OK",
@@ -562,14 +550,11 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "Switch manual-log is off"
           }
         }
       },
       "post": {
-        "summary": "Import the iPhone Health app's export.zip (or its export.xml), sent as the raw body, into the Imported file source: sleep hours, Apple exercise minutes and weight per day. Read in the background; poll GET (switch manual-log)",
+        "summary": "Import the iPhone Health app's export.zip (or its export.xml), sent as the raw body, into the Imported file source: sleep hours, Apple exercise minutes and weight per day. Read in the background; poll GET",
         "parameters": [
           {
             "name": "name",
@@ -607,9 +592,6 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "Switch manual-log is off"
           },
           "409": {
             "description": "An import is already running"
