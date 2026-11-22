@@ -82,8 +82,7 @@ const fresh = src => live(src) && src.last_sync && Date.now() - new Date(src.las
 const stateOf = x => x.state || (!x.installed ? 'not_installed' : x.status === 'needs_update' ? 'needs_update'
   : live(x) ? (fresh(x) ? 'connected' : 'stale') : x.status === 'not_configured' ? 'not_set_up' : x.status === 'needs_login' ? 'sign_in' : 'error');
 const srcOf = id => (ST && ST.sources.find(x => x.id === id)) || null;
-// Switch manual-log: days the owner logged by hand or imported live in Health itself, as two local sources.
-const manualOn = () => !!(ST && ST.manual_log);
+// Days the owner logged by hand or imported live in Health itself, as two local sources.
 const LOCAL_NOTE = { 'health-log': 'Logged by hand', 'health-import': 'From your imported file' };
 const srcName = id => (srcOf(id) || {}).name || (SUM && SUM.source_names && SUM.source_names[id]) || id;
 // A metric another source filled because the main source had none that day: its tiny origin note.
@@ -336,7 +335,6 @@ function renderEmpty() {
   if (!apps.length && !ST.sources.some(live)) box.append(h('p', 'hl-note', 'Get ' + join(ST.connectors.map(c => c.name)).replace(' and ', ' or ') + ' from the App Store.'));
   box.hidden = !box.childElementCount;
   el('wait').hidden = !ST.sources.some(live);
-  el('manual-empty').hidden = !manualOn();
 }
 function renderFocus() {
   const iso = shown(); if (!iso) return;
@@ -549,8 +547,6 @@ function setMetric(m) {
 const canReply = () => typeof window.WizardApp?.nav?.openContextDraft === 'function';
 function renderReply(iso) {
   el('reply').hidden = !canReply() || !rec4(iso);
-  el('logbtn').hidden = !manualOn();
-  el('daybar').hidden = el('reply').hidden && el('when').hidden && el('logbtn').hidden;
 }
 // The day's text is built from what is already on screen, so the draft opens synchronously inside the tap.
 function replyContext(iso) {
@@ -646,11 +642,11 @@ function openSources() {
     catch (err) { say(err.message, 'error'); rb.disabled = false; rb.textContent = 'Refresh'; }
   };
   if (ST.sources.some(x => !x.local)) nodes.push(rb);
-  if (manualOn()) nodes.push(manualRow());
+  nodes.push(manualRow());
   openSheet('Sources', nodes, 'src');
 }
 
-// ---------- switch manual-log: log a day by hand, or import a CSV of daily rows ----------
+// ---------- log a day by hand, or import a CSV of daily rows ----------
 function manualRow() {
   const row = h('div', 'hl-log-act');
   const lb = h('button', 'wz-button secondary', 'Log a day'); lb.type = 'button'; lb.onclick = () => openLog(shown());

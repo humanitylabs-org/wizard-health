@@ -272,7 +272,7 @@ class HealthTest(unittest.TestCase):
         self.assertEqual(http(self.port, 'POST', '/api/refresh', {})[0], 200)
         code, body = http(self.port, 'POST', '/mcp', {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})
         names = [t['name'] for t in json.loads(body)['result']['tools']]
-        self.assertEqual(names, ['health_daily_summary', 'health_days', 'health_trends', 'health_sleep', 'health_workouts', 'health_status', 'health_wake'])
+        self.assertEqual(names, ['health_daily_summary', 'health_days', 'health_trends', 'health_sleep', 'health_workouts', 'health_status', 'health_wake', 'health_log_day'])
         for name, args in [('health_daily_summary', {}), ('health_daily_summary', {'day': '2026-10-01'}), ('health_days', {'from': '2026-10-01'}),
                            ('health_trends', {'days': 7}), ('health_sleep', {}), ('health_workouts', {}), ('health_status', {}), ('health_wake', {'date': '2026-10-20'})]:
             code, body = http(self.port, 'POST', '/mcp', {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': name, 'arguments': args}})
@@ -1192,19 +1192,17 @@ class WordsTest(unittest.TestCase):
 
 
 class ManualLogTest(unittest.TestCase):
-    """0.17 (switch manual-log, #8): Health works without a wearable. Days logged by hand or imported from a CSV fill the
-    same squares, cards and colours, marked where they came from; a connected wearable wins for a day it covers; agent
-    tools read them and can add one; with the switch off nothing of it shows and nothing is deleted."""
+    """0.17 (#8, on for everyone since 0.19): Health works without a wearable. Days logged by hand or imported from a CSV
+    fill the same squares, cards and colours, marked where they came from; a connected wearable wins for a day it covers;
+    agent tools read them and can add one."""
 
     @classmethod
     def setUpClass(cls):
         sys.path.insert(0, str(ROOT / 'app'))
         import server
         cls.S = S = importlib.reload(server)
-        cls.saved = (S.GRANTS_FILE, S.ENV_SOURCES, S.DATA, S.KNOWN, S.switch_on)
+        cls.saved = (S.GRANTS_FILE, S.ENV_SOURCES, S.DATA, S.KNOWN)
         cls.tmp = Path(tempfile.mkdtemp())
-        cls.on = {'manual-log'}
-        S.switch_on = lambda i: i in cls.on
         cls.app = serve(S.Handler)
         cls.port = cls.app.server_address[1]
         S.TRUSTED_HOSTS.add(f'127.0.0.1:{cls.port}')
@@ -1212,7 +1210,7 @@ class ManualLogTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         S = cls.S
-        S.GRANTS_FILE, S.ENV_SOURCES, S.DATA, S.KNOWN, S.switch_on = cls.saved
+        S.GRANTS_FILE, S.ENV_SOURCES, S.DATA, S.KNOWN = cls.saved
         S._PROBE.update(at=0, list=None)
         cls.app.shutdown()
         shutil.rmtree(cls.tmp, ignore_errors=True)
@@ -1220,7 +1218,6 @@ class ManualLogTest(unittest.TestCase):
     def setUp(self):
         """A fresh box with no wearable at all."""
         S = self.S
-        self.on.clear(); self.on.add('manual-log')
         S.DATA = self.tmp / ('data-' + self._testMethodName)
         S.GRANTS_FILE, S.ENV_SOURCES = '/nonexistent', []
         S.KNOWN = [dict(k, base='http://127.0.0.1:9') for k in self.saved[3]]
@@ -1236,7 +1233,7 @@ class ManualLogTest(unittest.TestCase):
     def test_1_fresh_box_logs_a_week_into_all_three_graphs(self):
         S = self.S
         st = S.status_info()
-        self.assertTrue(st['manual_log'])
+        self.assertNotIn('manual_log', st)
         self.assertEqual(st['sources'], [])                  # nothing yet: the empty screen (with Log a day)
         self.assertFalse(S.daily_summary()['available'])
         self.week()
@@ -1342,26 +1339,24 @@ class ManualLogTest(unittest.TestCase):
         finally:
             srv.shutdown(); srv.server_close()
 
-    def test_5_switch_off_hides_and_keeps(self):
+    def test_5_switch_is_gone_and_its_stored_value_cleared(self):
         S = self.S
-        self.week()
-        self.on.clear()
-        st = S.status_info()
-        self.assertFalse(st['manual_log'])
-        self.assertEqual(st['sources'], [])
-        self.assertEqual(S.days_list({})['days'], [])
-        self.assertFalse(S.daily_summary()['available'])
-        with self.assertRaises(S.Problem):
-            S.log_day({'feel': 'ready'})
-        c = S.db()
+        self.assertNotIn('manual-log', [x['id'] for x in S.SWITCHES])
+        d = self.tmp / 'sw-5'; d.mkdir()
+        old = os.environ.get('WIZARD_SWITCHES_DIR'); os.environ['WIZARD_SWITCHES_DIR'] = str(d)
         try:
-            self.assertEqual(c.execute("SELECT COUNT(*) FROM days WHERE source='health-log'").fetchone()[0], 7)   # kept
+            (d / 'switches.json').write_text(json.dumps({'manual-log': False, 'report-yesterday-activity': True}))
+            S.forget_retired_switches()
+            self.assertEqual(json.loads((d / 'switches.json').read_text()), {'report-yesterday-activity': True})
+            self.assertNotIn('manual-log', [x['id'] for x in S.switches_doc()['switches']])
         finally:
-            c.close()
-        names = [x['name'] for x in S.rpc({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})['result']['tools']]
-        self.assertNotIn('health_log_day', names)
-        self.on.add('manual-log')
-        self.assertEqual(len(S.days_list({})['days']), 7)          # back as it was
+            if old is None: os.environ.pop('WIZARD_SWITCHES_DIR', None)
+            else: os.environ['WIZARD_SWITCHES_DIR'] = old
+        js = (ROOT / 'web' / 'app.js').read_text(); html = (ROOT / 'web' / 'index.html').read_text()
+        self.assertNotIn('manualOn', js)
+        self.assertNotIn('manual_log', js)
+        self.assertIn('id="manual-empty">', html)
+        self.assertIn('id="logbtn">Log', html)
 
     def test_6_http_and_mcp(self):
         S = self.S
@@ -1388,12 +1383,6 @@ class ManualLogTest(unittest.TestCase):
         self.assertEqual((day['readiness']['felt'], day['origins']['readiness'], day['origins']['sleep']), ('so-so', 'health-log', 'health-log'))
         r = S.rpc({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call', 'params': {'name': 'health_log_day', 'arguments': {'feel': 'meh'}}})
         self.assertTrue(r['result']['isError'])
-        self.on.clear()
-        r = S.rpc({'jsonrpc': '2.0', 'id': 5, 'method': 'tools/call', 'params': {'name': 'health_log_day', 'arguments': {'feel': 'ready'}}})
-        self.assertIn('error', r)
-        self.assertEqual(http(self.port, 'POST', '/api/log', {'feel': 'ready'})[0], 404)
-        sw = next(x for x in S.SWITCHES if x['id'] == 'manual-log')
-        self.assertEqual((sw['default'], sw['issues']), (False, ['humanitylabs-org/wizard-health#8', 'humanitylabs-org/wizard-health#9']))
 
 
     def apple_zip(self, path, extra=''):
@@ -1507,9 +1496,6 @@ class ManualLogTest(unittest.TestCase):
             self.assertEqual(j['state'], 'error', b[:20])
             self.assertTrue(j['error'])
         self.assertNotIn('health-import', {s['id'] for s in S.status_info()['sources']})
-        self.on.clear()
-        self.assertEqual(http(self.port, 'POST', '/api/import/apple-health', z, {'Content-Type': 'application/zip'})[0], 404)
-        self.assertEqual(http(self.port, 'GET', '/api/import/apple-health')[0], 404)
 
 if __name__ == '__main__':
     unittest.main()

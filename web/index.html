@@ -28,8 +28,8 @@
         </a>
         <div class="hl-setups" id="setups" hidden></div>
         <i class="hl-wait" id="wait" hidden></i>
-        <!-- Switch manual-log: no wearable needed. Log a day by hand or import a CSV of daily rows -->
-        <div class="hl-setups hl-manual" id="manual-empty" hidden>
+        <!-- No wearable needed. Log a day by hand or import a CSV of daily rows -->
+        <div class="hl-setups hl-manual" id="manual-empty">
           <p class="hl-note">No wearable? Log your sleep, how you feel and your activity by hand, or import your Apple Health export.</p>
           <button type="button" class="wz-button" id="log-first">Log a day</button>
           <button type="button" class="wz-button secondary" id="import-first">Import a file</button>
@@ -40,11 +40,11 @@
         <!-- The day shows only when a past day is picked, with one way back to today. The sources dot sits in the corner. -->
         <header class="hl-top">
           <!-- Reply (newer Wizards only): the shown day as an unsent Chats draft for the agent; nothing is sent -->
-          <div class="hl-daybar" id="daybar" hidden>
+          <div class="hl-daybar" id="daybar">
             <div class="hl-when-row" id="when" hidden><span class="hl-day" id="date"></span><button type="button" class="hl-today" id="today">Back to today</button></div>
             <button type="button" class="wz-button secondary hl-sm hl-reply" id="reply" hidden>Reply</button>
-            <!-- Switch manual-log: log the shown day by hand -->
-            <button type="button" class="wz-button secondary hl-sm hl-logbtn" id="logbtn" hidden>Log</button>
+            <!-- Log the shown day by hand -->
+            <button type="button" class="wz-button secondary hl-sm hl-logbtn" id="logbtn">Log</button>
           </div>
           <button type="button" class="hl-srcdot" id="srcdot" aria-label="Sources" title="Sources"><i></i></button>
         </header>
@@ -97,7 +97,7 @@
   </template>
   <!-- The one pop-up: the sources list behind the corner dot -->
   <dialog class="wz-sheet hl-sheet" id="sheet" aria-labelledby="sheet-h"><div id="sheet-body"></div></dialog>
-  <!-- Switch manual-log: the file picked for Import a file (a CSV, read in the page and sent as text, or the Apple Health export.zip, sent as it is) -->
+  <!-- The file picked for Import a file (a CSV, read in the page and sent as text, or the Apple Health export.zip, sent as it is) -->
   <input type="file" id="csvfile" accept=".csv,text/csv,text/plain,.zip,application/zip,.xml" hidden>
 </body>
 </html>
